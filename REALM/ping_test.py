@@ -66,7 +66,7 @@ def kill_realm() -> None:
 
 
 def run_test() -> bool:
-    """Retorna True si el servidor está online (TCP OK)."""
+    """Retorna True si el servidor está online (TCP OK). No hace check_tcp extra."""
     now = time.strftime("%H:%M:%S")
     tcp_ok, tcp_ms = check_tcp(SERVER_IP, AUTH_PORT)
 
@@ -78,20 +78,32 @@ def run_test() -> bool:
     return tcp_ok
 
 
-def start_monitor(on_offline=None) -> None:
+def start_monitor(on_offline=None) -> tuple[threading.Event, dict]:
     """
     Inicia el monitor de ping en un hilo daemon.
     on_offline: callable opcional que se llama cuando el TCP falla.
+    Retorna (stop_event, stats) donde stats["tcp_ms"] se actualiza en cada pulso.
     """
+    stop = threading.Event()
+    stats: dict = {"tcp_ms": 0.0}
+
     def _loop():
         print(f"[PING] Monitor iniciado — pulso cada {INTERVAL}s  |  {SERVER_IP}:{AUTH_PORT}")
-        while True:
-            online = run_test()
-            if not online and on_offline:
-                on_offline()
-            time.sleep(INTERVAL)
+        while not stop.is_set():
+            now = time.strftime("%H:%M:%S")
+            tcp_ok, ms = check_tcp(SERVER_IP, AUTH_PORT)
+            if tcp_ok:
+                stats["tcp_ms"] = ms
+                print(f"[PING {now}] TCP:{AUTH_PORT}  CONECTADO  ({ms:.0f} ms)")
+            else:
+                print(f"[PING {now}] TCP:{AUTH_PORT}  SIN CONEXIÓN  >> OFFLINE")
+                if on_offline:
+                    on_offline()
+            stop.wait(INTERVAL)
+        print("[PING] Monitor detenido.")
 
     threading.Thread(target=_loop, daemon=True).start()
+    return stop, stats
 
 
 if __name__ == "__main__":

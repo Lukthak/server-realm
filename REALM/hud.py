@@ -19,7 +19,7 @@ def _get_pen(target_h: int = 20) -> pygame.Surface:
     return _pen_sprite
 
 
-def draw_debug(surface, universe, cam_x, cam_y, font, chunk_coord) -> None:
+def draw_debug(surface, universe, cam_x, cam_y, font, chunk_coord, ping_ms: float = 0.0) -> None:
     overlay = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
     grid_color = (0, 220, 90, 128)
     cx0, cy0 = universe.center
@@ -43,6 +43,9 @@ def draw_debug(surface, universe, cam_x, cam_y, font, chunk_coord) -> None:
 
     hud = font.render(f"[{chunk_coord[0]}, {chunk_coord[1]}]", True, (0, 220, 90))
     surface.blit(hud, (6, 6))
+    ping_color = (0, 220, 90) if ping_ms < 150 else (255, 200, 0) if ping_ms < 300 else (255, 80, 80)
+    ping_surf = font.render(f"ping {ping_ms:.0f} ms", True, ping_color)
+    surface.blit(ping_surf, (6, 6 + hud.get_height() + 2))
 
 
 def draw_minimap(surface, player_x, player_y, others, minimap_range) -> None:

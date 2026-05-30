@@ -27,7 +27,7 @@ def main():
     check_server_or_exit()
 
     _ping_down = threading.Event()
-    start_monitor(on_offline=_ping_down.set)
+    _ping_stop, _ping_stats = start_monitor(on_offline=_ping_down.set)
 
     nickname = ask_nickname()
 
@@ -162,6 +162,15 @@ def main():
         except queue.Empty:
             pass
 
+        # Si hay error de conexión, congelar pantalla y esperar a que se cierre el popup
+        if conn_error:
+            if not _popup_shown.is_set():
+                pygame.quit()
+                sys.exit()
+            pygame.display.flip()
+            clock.tick(FPS)
+            continue
+
         keys = pygame.key.get_pressed()
         if any(keys[k] for k in (pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d)):
             if chat_msg["text"] and chat_msg["until"] == float("inf"):
@@ -186,7 +195,7 @@ def main():
             draw_local_player(screen, player, nickname, cam_x, cam_y, nick_font,
                               chat_open.is_set(), current_chat)
             if debug:
-                draw_debug(screen, universe, cam_x, cam_y, font, chunk_coord)
+                draw_debug(screen, universe, cam_x, cam_y, font, chunk_coord, _ping_stats["tcp_ms"])
 
         if profile:
             panel_h = HEIGHT // 2
@@ -199,27 +208,27 @@ def main():
             )
 
         net.update()
-        if _ping_down.is_set() and not conn_error:
+        udp_lost = net.status == UDPLink.LOST
+        if (_ping_down.is_set() or udp_lost) and not conn_error:
             conn_error = True
             net.stop()
+            _ping_stop.set()  # detener el monitor TCP
             save_user_position(nickname, player.x, player.y)
             save_user_max_chunks(nickname, total_chunks)
             save_user_skin(nickname, player.skin_index)
-            def _show_popup():
+            _msg = (
+                f"Sin conexión con el servidor:\n{SERVER_IP}\n\nEl juego se cerrará."
+                if _ping_down.is_set()
+                else "Fuiste desconectado del servidor.\n\nEl juego se cerrará."
+            )
+            def _show_popup(msg=_msg):
                 _popup_shown.set()
                 root = tk.Tk()
                 root.withdraw()
-                mb.showerror(
-                    "REALM — Sin conexión",
-                    f"Sin conexión con el servidor:\n{SERVER_IP}\n\nEl juego se cerrará.",
-                )
+                mb.showerror("REALM — Sin conexión", msg)
                 root.destroy()
                 _popup_shown.clear()
             threading.Thread(target=_show_popup, daemon=True).start()
-
-        if conn_error and not _popup_shown.is_set():
-            pygame.quit()
-            sys.exit()
 
         pygame.display.flip()
         clock.tick(FPS)
