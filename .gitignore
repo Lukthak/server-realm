@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Entorno virtual
+Radio/.venv/
+.venv/
+
+# PyInstaller
+*.spec
+build/
+dist/
+
+# ffmpeg binario
+ffmpeg/
+vendor/
+
+# Archivos locales
+users.json
+*.log
