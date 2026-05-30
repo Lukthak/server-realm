@@ -141,6 +141,8 @@ clients = {}
 next_id = 1
 lock = threading.Lock()
 running = True
+kicked_addrs: dict = {}   # addr -> timestamp del kick
+_KICK_TIMEOUT = 30.0      # segundos que el kicked no puede reconectarse
 
 
 def _ts():
@@ -159,21 +161,40 @@ def _cmd_loop():
     global running
     while running:
         try:
-            cmd = input().strip().upper()
+            cmd = input().strip()
         except EOFError:
             break
-        if cmd == "EXIT":
+        cmd_upper = cmd.upper()
+        if cmd_upper == "EXIT":
             running = False
             break
-        elif cmd == "ONLINE":
+        elif cmd_upper == "ONLINE":
             with lock:
-                count = len(clients)
-            print(f"{count} jugador(es) en linea.")
-        elif cmd == "HELP":
-            print("  EXIT   — cerrar el servidor")
-            print("  ONLINE — ver cuantos jugadores hay")
-            print("  HELP   — ver esta lista")
-        elif cmd:
+                if clients:
+                    for c in clients.values():
+                        print(f"  {c['nick']}")
+                    print(f"  Total: {len(clients)} jugador(es)")
+                else:
+                    print("  No hay jugadores conectados.")
+        elif cmd_upper.startswith("KICK "):
+            target = cmd[5:].strip()
+            with lock:
+                found = [(addr, c) for addr, c in clients.items()
+                         if c["nick"].lower() == target.lower()]
+            if not found:
+                print(f"  '{target}' no está conectado.")
+            else:
+                with lock:
+                    for addr, c in found:
+                        kicked_addrs[addr] = time.time()
+                        del clients[addr]
+                print(f"  {found[0][1]['nick']} fue kickeado.")
+        elif cmd_upper == "HELP":
+            print("  EXIT        — cerrar el servidor")
+            print("  ONLINE      — ver jugadores conectados")
+            print("  KICK <nick> — desconectar a un jugador")
+            print("  HELP        — ver esta lista")
+        elif cmd.strip():
             print(f"Comando desconocido. Escribi HELP para ver los comandos.")
 
 
@@ -195,6 +216,14 @@ def run(bind_ip="0.0.0.0"):
             data, addr = sock.recvfrom(1024)
             if len(data) < PACKET_IN:
                 continue
+
+            # Ignorar jugadores kickeados durante _KICK_TIMEOUT segundos
+            now_kick = time.time()
+            if addr in kicked_addrs:
+                if now_kick - kicked_addrs[addr] < _KICK_TIMEOUT:
+                    continue
+                else:
+                    del kicked_addrs[addr]
 
             x, y, skin, chunks, raw_nick, raw_chat = struct.unpack("!ffII16s48s", data[:PACKET_IN])
 
