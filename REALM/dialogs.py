@@ -1,9 +1,9 @@
-import hashlib
 import json
-import os
+import socket
 import sys
 import queue
 import tkinter as tk
+import tkinter.messagebox as mb
 import urllib.request
 from pathlib import Path
 
@@ -14,139 +14,53 @@ _IS_LOCAL = SERVER_IP in _LOCAL_IPS
 
 ICONO_PATH = str(Path(__file__).parent / "ICONO.ico")
 _AUTH_URL = f"http://{SERVER_IP}:5556"
-_DB_PATH = Path(__file__).parent / "users.json"
 
 
-# ── Helpers de base de datos local (fallback) ────────────────────────────────
-
-def _load_db() -> dict:
-    if _DB_PATH.exists():
-        try:
-            return json.loads(_DB_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-
-def _save_db(db: dict) -> None:
-    _DB_PATH.write_text(json.dumps(db, indent=2), encoding="utf-8")
-
-
-def _hash_pw(password: str, salt: str) -> str:
-    return hashlib.sha256((salt + password).encode()).hexdigest()
-
-
-# ── Cliente HTTP con fallback local ──────────────────────────────────────────
+# ── Cliente HTTP (solo remoto) ───────────────────────────────────────────────
 
 def _server_available() -> bool:
     try:
-        urllib.request.urlopen(f"{_AUTH_URL}/exists",
-                               data=b'{"user":"_ping"}',
-                               timeout=2)
-        return True
+        with socket.create_connection((SERVER_IP, 5556), timeout=2):
+            return True
     except Exception:
         return False
 
 
+def _show_no_server_and_exit() -> None:
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        _set_icon(root)
+    except Exception:
+        pass
+    mb.showerror(
+        "REALM — Sin conexión",
+        f"No se puede conectar al servidor:\n{SERVER_IP}\n\nVerificá tu conexión o intentá más tarde.",
+    )
+    root.destroy()
+    sys.exit()
+
+
 def check_server_or_exit() -> None:
-    """Muestra error y termina si el servidor no está disponible (modo no-local)."""
     if _IS_LOCAL:
         return
     if not _server_available():
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            _set_icon(root)
-        except Exception:
-            pass
-        import tkinter.messagebox as mb
-        mb.showerror(
-            "REALM — Sin conexión",
-            f"No se puede conectar al servidor:\n{SERVER_IP}\n\nVerificá tu conexión o intentá más tarde.",
-        )
-        root.destroy()
-        sys.exit()
-
-
-_USE_REMOTE: bool | None = None  # se detecta una sola vez al inicio
+        _show_no_server_and_exit()
 
 
 def _auth_request(action: str, payload: dict) -> dict:
-    global _USE_REMOTE
-    if _USE_REMOTE is None:
-        _USE_REMOTE = _server_available()
-
-    if _USE_REMOTE:
-        try:
-            body = json.dumps(payload).encode()
-            req = urllib.request.Request(
-                f"{_AUTH_URL}/{action}", data=body,
-                headers={"Content-Type": "application/json"},
-            )
-            resp = urllib.request.urlopen(req, timeout=5)
-            return json.loads(resp.read())
-        except Exception:
-            _USE_REMOTE = False  # servidor caído, caer a local
-
-    # ── fallback local ───────────────────────────────────────────────────────
-    db = _load_db()
-    user = payload.get("user", "")
-
-    if action == "exists":
-        return {"exists": user in db}
-
-    elif action == "register":
-        salt = os.urandom(16).hex()
-        db[user] = {"salt": salt, "hash": _hash_pw(payload["password"], salt)}
-        _save_db(db)
-        return {"ok": True}
-
-    elif action == "login":
-        entry = db.get(user)
-        if entry and _hash_pw(payload["password"], entry["salt"]) == entry["hash"]:
-            return {"ok": True}
-        return {"ok": False}
-
-    elif action == "get_pos":
-        entry = db.get(user, {})
-        return {"x": entry.get("pos_x"), "y": entry.get("pos_y")}
-
-    elif action == "save_pos":
-        if user in db:
-            db[user]["pos_x"] = payload["x"]
-            db[user]["pos_y"] = payload["y"]
-            _save_db(db)
-        return {"ok": True}
-
-    elif action == "get_bio":
-        return {"bio": db.get(user, {}).get("bio", "")}
-
-    elif action == "save_bio":
-        if user in db:
-            db[user]["bio"] = str(payload.get("bio", ""))[:200]
-            _save_db(db)
-        return {"ok": True}
-
-    elif action == "get_dist":
-        return {"dist": db.get(user, {}).get("max_chunks", 0)}
-
-    elif action == "save_dist":
-        val = int(payload.get("dist", 0))
-        if user in db and val > db[user].get("max_chunks", 0):
-            db[user]["max_chunks"] = val
-            _save_db(db)
-        return {"ok": True}
-
-    elif action == "get_skin":
-        return {"skin": db.get(user, {}).get("skin", 0)}
-
-    elif action == "save_skin":
-        if user in db:
-            db[user]["skin"] = int(payload.get("skin", 0))
-            _save_db(db)
-        return {"ok": True}
-
-    return {}
+    if _IS_LOCAL:
+        return {}
+    try:
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{_AUTH_URL}/{action}", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = urllib.request.urlopen(req, timeout=5)
+        return json.loads(resp.read())
+    except Exception:
+        return {}  # falla silenciosamente — LOST en net.py maneja el cierre
 
 
 def get_user_position(username: str, default_x: float, default_y: float) -> tuple:
@@ -282,6 +196,9 @@ def ask_nickname() -> str:
     # En modo local: solo el nombre, sin tocar ninguna DB
     if _IS_LOCAL:
         return user
+
+    if not _server_available():
+        _show_no_server_and_exit()
 
     is_new = not _auth_request("exists", {"user": user}).get("exists", False)
 

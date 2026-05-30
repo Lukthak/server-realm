@@ -1,7 +1,9 @@
+import io
 import os
 import time
 
 import pygame
+from PIL import Image
 
 _SPRITES_DIR = os.path.join(os.path.dirname(__file__), "sprites")
 _pen_sprite: pygame.Surface | None = None
@@ -170,3 +172,49 @@ def draw_profile_panel(surface, name: str, sprite: pygame.Surface,
 
     surface.blit(panel, (0, offset_y))
     return pen_rect
+
+
+# ── Utilidades de render compartidas ────────────────────────────────────────
+
+def load_icon(icono_path: str):
+    """Carga ICONO.ico como superficie pygame 32×32."""
+    try:
+        img = Image.open(icono_path).convert("RGBA").resize((32, 32), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return pygame.image.load(buf, "icon.png")
+    except Exception:
+        return None
+
+
+def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites) -> None:
+    """Dibuja todos los jugadores remotos con sus burbujas/nick."""
+    for _pid, (rx, ry, rskin, _rchunks, rnick, rchat) in others.items():
+        idx = int(rskin) % len(ghost_sprites)
+        spr = ghost_sprites[idx]
+        sx = int(rx) - cam_x
+        sy = int(ry) - cam_y
+        rcx = sx + spr.get_width() // 2
+        if rchat == "\x01":
+            draw_typing_dots(surface, rcx, sy)
+        elif rchat:
+            draw_chat_bubble(surface, nick_font, rchat, rcx, sy)
+        surface.blit(spr, (sx, sy))
+        if rnick:
+            label = nick_font.render(rnick, True, (200, 200, 255))
+            surface.blit(label, (rcx - label.get_width() // 2, sy + spr.get_height() + 2))
+
+
+def draw_local_player(surface, player, nickname, cam_x, cam_y, nick_font,
+                      is_typing: bool, current_chat: str) -> None:
+    """Dibuja el jugador local con nick y burbuja/dots."""
+    player.draw(surface, cam_x, cam_y)
+    pcx = int(player.x) - cam_x + player.w // 2
+    pcy = int(player.y) - cam_y
+    label = nick_font.render(nickname, True, (200, 200, 255))
+    surface.blit(label, (pcx - label.get_width() // 2, pcy + player.h + 2))
+    if is_typing:
+        draw_typing_dots(surface, pcx, pcy)
+    elif current_chat:
+        draw_chat_bubble(surface, nick_font, current_chat, pcx, pcy)

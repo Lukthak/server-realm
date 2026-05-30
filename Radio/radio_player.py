@@ -17,6 +17,13 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+# Cuando el .exe se relanza con --realm, ejecuta el juego directamente
+if "--realm" in sys.argv:
+    sys.argv.remove("--realm")
+    from realm import main as _realm_main  # type: ignore
+    _realm_main()
+    sys.exit(0)
+
 if sys.platform == "win32":
     import winreg
 
@@ -909,26 +916,6 @@ class RadioApp:
             self._realm_ip = new_ip.strip()
 
     def _launch_realm(self) -> None:
-        if getattr(sys, "frozen", False):
-            exe_dir = Path(sys.executable).resolve().parent
-            candidates = [
-                exe_dir / "realm.py",
-                exe_dir / "REALM" / "realm.py",
-                exe_dir.parent / "realm.py",
-                exe_dir.parent / "REALM" / "realm.py",
-                exe_dir.parent.parent / "realm.py",
-                exe_dir.parent.parent / "REALM" / "realm.py",
-                exe_dir.parent.parent.parent / "REALM" / "realm.py",
-                Path.home() / "Documents" / "map" / "REALM" / "realm.py",
-            ]
-        else:
-            base = Path(__file__).resolve().parent.parent
-            candidates = [base / "REALM" / "realm.py"]
-        realm_path = next((p for p in candidates if p.exists()), None)
-        if realm_path is None:
-            tried = "\n".join(str(p) for p in candidates)
-            messagebox.showerror("REALM", f"No se encontró realm.py.\nRutas buscadas:\n{tried}")
-            return
         self.root.update_idletasks()
         x = self.root.winfo_x() + self.root.winfo_width() + 4
         titlebar_h = self.root.winfo_rooty() - self.root.winfo_y()
@@ -938,16 +925,13 @@ class RadioApp:
         env["REALM_SERVER_IP"] = self._realm_ip
         no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
         if getattr(sys, "frozen", False):
-            python_exe = (
-                shutil.which("pythonw")
-                or shutil.which("python")
-                or shutil.which("python3")
-            )
-            if python_exe is None:
-                messagebox.showerror("REALM", "No se encontró Python instalado para lanzar REALM.")
-                return
-            self._realm_process = subprocess.Popen([python_exe, str(realm_path)], env=env, **no_window)
+            self._realm_process = subprocess.Popen([sys.executable, "--realm"], env=env)
         else:
+            base = Path(__file__).resolve().parent.parent
+            realm_path = base / "REALM" / "realm.py"
+            if not realm_path.exists():
+                messagebox.showerror("REALM", f"No se encontró realm.py en:\n{realm_path}")
+                return
             self._realm_process = subprocess.Popen([sys.executable, str(realm_path)], env=env, **no_window)
 
     def _pause_current(self) -> None:
