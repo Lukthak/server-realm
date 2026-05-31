@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import time
 
@@ -7,6 +8,7 @@ from PIL import Image
 
 _SPRITES_DIR = os.path.join(os.path.dirname(__file__), "sprites")
 _pen_sprite: pygame.Surface | None = None
+_REMOTE_SKIN_CACHE: dict[int, int] = {}
 
 
 def _get_pen(target_h: int = 20) -> pygame.Surface:
@@ -54,7 +56,7 @@ def draw_minimap(surface, player_x, player_y, others, minimap_range) -> None:
     cx, cy = w // 2, h // 2
     scale_x = w / (2 * minimap_range)
     scale_y = h / (2 * minimap_range)
-    for _pid, (rx, ry, _rskin, _rchunks, _rnick, _rchat) in others.items():
+    for _pid, (rx, ry, _rangle, _rskin, _rchunks, _rnick, _rchat) in others.items():
         px = int(cx + (rx - player_x) * scale_x)
         py = int(cy + (ry - player_y) * scale_y)
         if 0 <= px < w and 0 <= py < h:
@@ -193,30 +195,60 @@ def load_icon(icono_path: str):
 
 def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites) -> None:
     """Dibuja todos los jugadores remotos con sus burbujas/nick."""
-    for _pid, (rx, ry, rskin, _rchunks, rnick, rchat) in others.items():
-        idx = int(rskin) % len(ghost_sprites)
-        spr = ghost_sprites[idx]
-        sx = int(rx) - cam_x
-        sy = int(ry) - cam_y
-        rcx = sx + spr.get_width() // 2
+    for _pid, (rx, ry, rangle, rskin, _rchunks, rnick, rchat) in others.items():
+        rnick = str(rnick).replace("\x00", "")
+        rchat = str(rchat).replace("\x00", "")
+        try:
+            skin_raw = int(rskin)
+        except Exception:
+            skin_raw = -1
+        if 0 <= skin_raw < len(ghost_sprites):
+            idx = skin_raw
+            _REMOTE_SKIN_CACHE[_pid] = idx
+        else:
+            idx = _REMOTE_SKIN_CACHE.get(_pid, 0)
+
+        try:
+            angle = float(rangle)
+        except Exception:
+            angle = 0.0
+        if not math.isfinite(angle):
+            angle = 0.0
+
+        base = ghost_sprites[idx]
+        spr = pygame.transform.rotate(base, -angle)
+        # Ancla estable en bounds lógicos (sprite base), no en el sprite rotado.
+        cx_world = float(rx) + base.get_width() / 2
+        cy_world = float(ry) + base.get_height() / 2
+        rcx = int(cx_world - cam_x)
+        rcy = int(cy_world - cam_y)
+        sx = rcx - spr.get_width() // 2
+        sy = rcy - spr.get_height() // 2
+        top_base = int(float(ry) - cam_y)
+        bottom_base = top_base + base.get_height()
         if rchat == "\x01":
-            draw_typing_dots(surface, rcx, sy)
+            draw_typing_dots(surface, rcx, top_base)
         elif rchat:
-            draw_chat_bubble(surface, nick_font, rchat, rcx, sy)
+            draw_chat_bubble(surface, nick_font, rchat, rcx, top_base)
         surface.blit(spr, (sx, sy))
         if rnick:
             label = nick_font.render(rnick, True, (200, 200, 255))
-            surface.blit(label, (rcx - label.get_width() // 2, sy + spr.get_height() + 2))
+            surface.blit(label, (rcx - label.get_width() // 2, bottom_base + 2))
 
 
 def draw_local_player(surface, player, nickname, cam_x, cam_y, nick_font,
                       is_typing: bool, current_chat: str) -> None:
     """Dibuja el jugador local con nick y burbuja/dots."""
     player.draw(surface, cam_x, cam_y)
-    pcx = int(player.x) - cam_x + player.w // 2
-    pcy = int(player.y) - cam_y
+    if hasattr(player, "get_label_anchor"):
+        pcx, pbottom = player.get_label_anchor(cam_x, cam_y)
+        pcy = pbottom - getattr(player, "base_h", player.h)
+    else:
+        pcx = int(player.x) - cam_x + player.w // 2
+        pcy = int(player.y) - cam_y
+        pbottom = pcy + player.h
     label = nick_font.render(nickname, True, (200, 200, 255))
-    surface.blit(label, (pcx - label.get_width() // 2, pcy + player.h + 2))
+    surface.blit(label, (pcx - label.get_width() // 2, pbottom + 2))
     if is_typing:
         draw_typing_dots(surface, pcx, pcy)
     elif current_chat:

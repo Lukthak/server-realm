@@ -134,8 +134,11 @@ class _AuthHandler(BaseHTTPRequestHandler):
         pass
 
 TIMEOUT = 5.0
-PACKET_IN = 80       # float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
-PACKET_PLAYER = 84   # uint32 id + float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
+PACKET_IN_LEG = 80   # float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
+PACKET_IN_EXT = 84   # float x + float y + float angle + uint32 skin + uint32 chunks + 16s nick + 48s chat
+PACKET_PLAYER_LEG = 84   # uint32 id + float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
+PACKET_PLAYER_EXT = 88   # uint32 id + float x + float y + float angle + uint32 skin + uint32 chunks + 16s nick + 48s chat
+FORCE_EXT_PROTOCOL = False
 
 clients = {}
 next_id = 1
@@ -214,7 +217,7 @@ def run(bind_ip="0.0.0.0"):
     while running:
         try:
             data, addr = sock.recvfrom(1024)
-            if len(data) < PACKET_IN:
+            if len(data) < PACKET_IN_LEG:
                 continue
 
             # Ignorar jugadores kickeados durante _KICK_TIMEOUT segundos
@@ -225,7 +228,13 @@ def run(bind_ip="0.0.0.0"):
                 else:
                     del kicked_addrs[addr]
 
-            x, y, skin, chunks, raw_nick, raw_chat = struct.unpack("!ffII16s48s", data[:PACKET_IN])
+            if len(data) >= PACKET_IN_EXT:
+                x, y, angle, skin, chunks, raw_nick, raw_chat = struct.unpack("!fffII16s48s", data[:PACKET_IN_EXT])
+                fmt = "ext"
+            else:
+                x, y, skin, chunks, raw_nick, raw_chat = struct.unpack("!ffII16s48s", data[:PACKET_IN_LEG])
+                angle = 0.0
+                fmt = "leg"
 
             if skin == 0xFFFFFFFF:
                 with lock:
@@ -240,27 +249,39 @@ def run(bind_ip="0.0.0.0"):
 
             with lock:
                 if addr not in clients:
-                    clients[addr] = {"id": next_id, "x": x, "y": y, "skin": skin, "chunks": chunks, "nick": nick, "chat": chat, "last_seen": now}
+                    clients[addr] = {"id": next_id, "x": x, "y": y, "angle": angle, "skin": skin, "chunks": chunks, "nick": nick, "chat": chat, "last_seen": now, "fmt": fmt}
                     print(f"[{_ts()}] {nick} se conecto.")
                     next_id += 1
                 else:
                     clients[addr]["x"] = x
                     clients[addr]["y"] = y
+                    clients[addr]["angle"] = angle
                     clients[addr]["skin"] = skin
                     clients[addr]["chunks"] = chunks
                     clients[addr]["nick"] = nick
                     clients[addr]["chat"] = chat
                     clients[addr]["last_seen"] = now
+                    clients[addr]["fmt"] = fmt
 
                 _cleanup(now)
 
-                response = b"".join(
-                    struct.pack("!IffII16s48s", c["id"], c["x"], c["y"], c["skin"], c["chunks"],
-                                c["nick"].encode('utf-8')[:16].ljust(16, b'\x00'),
-                                c["chat"].encode('utf-8')[:48].ljust(48, b'\x00'))
-                    for a, c in clients.items()
-                    if a != addr
-                )
+                recipient_fmt = "ext" if FORCE_EXT_PROTOCOL else clients.get(addr, {}).get("fmt", "leg")
+                if recipient_fmt == "ext":
+                    response = b"".join(
+                        struct.pack("!IfffII16s48s", c["id"], c["x"], c["y"], c.get("angle", 0.0), c["skin"], c["chunks"],
+                                    c["nick"].encode('utf-8')[:16].ljust(16, b'\x00'),
+                                    c["chat"].encode('utf-8')[:48].ljust(48, b'\x00'))
+                        for a, c in clients.items()
+                        if a != addr
+                    )
+                else:
+                    response = b"".join(
+                        struct.pack("!IffII16s48s", c["id"], c["x"], c["y"], c["skin"], c["chunks"],
+                                    c["nick"].encode('utf-8')[:16].ljust(16, b'\x00'),
+                                    c["chat"].encode('utf-8')[:48].ljust(48, b'\x00'))
+                        for a, c in clients.items()
+                        if a != addr
+                    )
 
             if response:
                 sock.sendto(response, addr)

@@ -14,6 +14,8 @@ _IS_LOCAL = SERVER_IP in _LOCAL_IPS
 
 ICONO_PATH = str(Path(__file__).parent / "ICONO.ico")
 _AUTH_URL = f"http://{SERVER_IP}:5556"
+_CHAT_HISTORY: list[str] = []
+_CHAT_HISTORY_MAX = 50
 
 
 # ── Cliente HTTP (solo remoto) ───────────────────────────────────────────────
@@ -258,8 +260,43 @@ def open_chat_dialog(result_q: queue.Queue, done_event) -> None:
     entry.pack()
     entry.focus_set()
 
+    hist_idx = len(_CHAT_HISTORY)
+    draft = ""
+
+    def _set_entry_text(text: str) -> None:
+        result.set(text)
+        entry.icursor(tk.END)
+
+    def _hist_up(e=None):
+        nonlocal hist_idx, draft
+        if not _CHAT_HISTORY:
+            return "break"
+        if hist_idx == len(_CHAT_HISTORY):
+            draft = result.get()
+        if hist_idx > 0:
+            hist_idx -= 1
+            _set_entry_text(_CHAT_HISTORY[hist_idx])
+        return "break"
+
+    def _hist_down(e=None):
+        nonlocal hist_idx
+        if not _CHAT_HISTORY:
+            return "break"
+        if hist_idx < len(_CHAT_HISTORY) - 1:
+            hist_idx += 1
+            _set_entry_text(_CHAT_HISTORY[hist_idx])
+        elif hist_idx == len(_CHAT_HISTORY) - 1:
+            hist_idx = len(_CHAT_HISTORY)
+            _set_entry_text(draft)
+        return "break"
+
     def confirm(e=None):
-        result_q.put(result.get().strip()[:48])
+        text = result.get().strip()[:48]
+        if text:
+            _CHAT_HISTORY.append(text)
+            if len(_CHAT_HISTORY) > _CHAT_HISTORY_MAX:
+                del _CHAT_HISTORY[:-_CHAT_HISTORY_MAX]
+        result_q.put(text)
         root.quit()
 
     def cancel(e=None):
@@ -268,6 +305,8 @@ def open_chat_dialog(result_q: queue.Queue, done_event) -> None:
 
     entry.bind("<Return>", confirm)
     entry.bind("<Escape>", cancel)
+    entry.bind("<Up>", _hist_up)
+    entry.bind("<Down>", _hist_down)
     root.protocol("WM_DELETE_WINDOW", cancel)
 
     btn_frame = tk.Frame(root)

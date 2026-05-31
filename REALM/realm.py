@@ -1,9 +1,13 @@
 import queue
+import random
+import socket
+import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
 import tkinter.messagebox as mb
+from pathlib import Path
 
 import pygame
 
@@ -22,12 +26,47 @@ from sonda import Sonda, SPRITE_NAMES, _load_sprite
 from universe import Universe
 
 
+def _local_server_running() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 5556), timeout=1):
+            return True
+    except Exception:
+        return False
+
+
+def _start_local_server() -> None:
+    """Lanza server.py en una nueva consola si no está corriendo."""
+    if _local_server_running():
+        print("[LOCAL] Servidor ya en ejecución.")
+        return
+    server_path = str(Path(__file__).parent / "server.py")
+    subprocess.Popen(
+        [sys.executable, server_path],
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+    print("[LOCAL] Servidor iniciado — esperando...")
+    for _ in range(15):          # hasta 3 segundos
+        time.sleep(0.2)
+        if _local_server_running():
+            print("[LOCAL] Servidor listo.")
+            return
+    print("[LOCAL] Advertencia: el servidor tardó más de lo esperado.")
+
+
 def main():
     print(f"Servidor: {SERVER_IP}:{SERVER_PORT}")
     check_server_or_exit()
 
     _ping_down = threading.Event()
-    _ping_stop, _ping_stats = start_monitor(on_offline=_ping_down.set)
+    _is_local = SERVER_IP in ("127.0.0.1", "localhost", "::1")
+    if _is_local:
+        _start_local_server()
+        _ping_stop = threading.Event()
+        _ping_stats: dict = {"tcp_ms": 0.0}
+        print("[PING] Servidor local — monitor desactivado.")
+    else:
+        _ping_stop, _ping_stats = start_monitor(on_offline=_ping_down.set)
 
     nickname = ask_nickname()
 
@@ -43,7 +82,9 @@ def main():
 
     universe = Universe(MAP_WIDTH, MAP_HEIGHT, WIDTH, HEIGHT)
     start_x, start_y = get_user_position(nickname, MAP_WIDTH // 2, MAP_HEIGHT // 2)
-    player = Sonda(start_x=start_x, start_y=start_y, speed=2)
+    start_x += random.randint(-20, 20)
+    start_y += random.randint(-20, 20)
+    player = Sonda(start_x=start_x, start_y=start_y, speed=1.4)
     player.skin_index = get_user_skin(nickname) % len(player.sprites)
     player.image = player.sprites[player.skin_index]
     net = UDPLink()
@@ -102,7 +143,7 @@ def main():
                                    player.w, player.h).collidepoint(mx, my):
                         clicked = {"name": nickname, "sprite": player.image, "chunks": total_chunks}
                     else:
-                        for _pid, (rx, ry, rskin, rchunks, rnick, _rchat) in net.get_others().items():
+                        for _pid, (rx, ry, _rangle, rskin, rchunks, rnick, _rchat) in net.get_others().items():
                             spr = ghost_sprites[int(rskin) % len(ghost_sprites)]
                             if pygame.Rect(int(rx) - cam_x, int(ry) - cam_y,
                                            spr.get_width(), spr.get_height()).collidepoint(mx, my):
@@ -148,8 +189,53 @@ def main():
         try:
             msg = chat_queue.get_nowait()
             if msg:
-                chat_msg["text"] = msg
-                chat_msg["until"] = float("inf")
+                raw = msg.strip()
+                cmd = raw.lower()
+                if cmd == "/blackhole":
+                    dest = universe.find_nearby_blackhole(player.x, player.y)
+                    if dest:
+                        player.x, player.y = float(dest[0]), float(dest[1])
+                        chat_msg["text"] = ">> Viajando al black hole..."
+                        chat_msg["until"] = time.time() + 3.0
+                    else:
+                        chat_msg["text"] = ">> No hay black holes cercanos"
+                        chat_msg["until"] = time.time() + 3.0
+                elif cmd == "/hub":
+                    pw = getattr(player, "base_w", player.w)
+                    ph = getattr(player, "base_h", player.h)
+                    player.x = float(MAP_WIDTH // 2 - pw // 2)
+                    player.y = float(MAP_HEIGHT // 2 - ph // 2)
+                    player.vx = 0.0
+                    player.vy = 0.0
+                    chat_msg["text"] = ">> Regresaste al hub"
+                    chat_msg["until"] = time.time() + 3.0
+                elif cmd.startswith("/tp"):
+                    parts = raw.split(maxsplit=1)
+                    target_name = parts[1].strip() if len(parts) > 1 else ""
+                    if not target_name:
+                        chat_msg["text"] = ">> Uso: /tp nombre"
+                        chat_msg["until"] = time.time() + 3.0
+                    else:
+                        target_key = target_name.lower()
+                        found = None
+                        for _pid, (rx, ry, _rangle, _rskin, _rchunks, rnick, _rchat) in net.get_others().items():
+                            nick_clean = str(rnick).replace("\x00", "")
+                            if nick_clean.lower() == target_key:
+                                found = (float(rx), float(ry), nick_clean)
+                                break
+
+                        if found is None:
+                            chat_msg["text"] = f">> Jugador no encontrado: {target_name}"
+                            chat_msg["until"] = time.time() + 3.0
+                        else:
+                            player.x, player.y = found[0], found[1]
+                            player.vx = 0.0
+                            player.vy = 0.0
+                            chat_msg["text"] = f">> Teleport a {found[2]}"
+                            chat_msg["until"] = time.time() + 3.0
+                else:
+                    chat_msg["text"] = msg
+                    chat_msg["until"] = float("inf")
         except queue.Empty:
             pass
 
@@ -182,7 +268,7 @@ def main():
         total_chunks = _chunks_all_time + len(_visited_chunks)
 
         current_chat = chat_msg["text"] if time.time() < chat_msg["until"] else ""
-        net.send(player.x, player.y, player.skin_index, total_chunks, nickname,
+        net.send(player.x, player.y, player.angle, player.skin_index, total_chunks, nickname,
                  "\x01" if chat_open.is_set() else current_chat)
 
         cam_x, cam_y = player.get_camera(WIDTH, HEIGHT)
@@ -209,7 +295,7 @@ def main():
 
         net.update()
         udp_lost = net.status == UDPLink.LOST
-        if (_ping_down.is_set() or udp_lost) and not conn_error:
+        if not _is_local and (_ping_down.is_set() or udp_lost) and not conn_error:
             conn_error = True
             net.stop()
             _ping_stop.set()  # detener el monitor TCP

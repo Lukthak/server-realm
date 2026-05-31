@@ -6,7 +6,10 @@ import time
 
 from config import SERVER_IP, SERVER_PORT
 
-_PACKET = 84          # uint32 id + float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
+_PACKET_EXT = 88      # uint32 id + float x + float y + float angle + uint32 skin + uint32 chunks + 16s nick + 48s chat
+_PACKET_LEG = 84      # uint32 id + float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
+_ANGLE_Q_STEPS = 1024
+_SKIN_SLOTS = 3
 _HANDSHAKE_TIMEOUT  = 8.0   # segundos esperando primera respuesta del servidor
 _DISCONNECT_TIMEOUT = 8.0   # segundos sin respuesta para declarar conexion perdida
 _KEEPALIVE_INTERVAL = 1.0   # si el game loop no envia hace tanto, el hilo de red reenvia
@@ -40,6 +43,7 @@ class UDPLink:
         self._last_send = 0.0
         self._first_send = 0.0
         self._last_packet = None   # ultimo paquete de posicion, para el keepalive
+        self._rx_packet_size = None  # tamaño de paquete detectado (legacy/ext)
         self.ping_ms: float = 0.0
         self._ping_probe: float = 0.0  # tiempo del send que estamos midiendo
         threading.Thread(target=self._recv_loop, daemon=True).start()
@@ -51,10 +55,25 @@ class UDPLink:
         except Exception:
             return False
 
-    def send(self, x, y, skin=0, chunks=0, nick="", chat=""):
+    def _pack_skin_angle(self, skin: int, angle: float) -> int:
+        a = float(angle) % 360.0
+        aq = int((a / 360.0) * _ANGLE_Q_STEPS) % _ANGLE_Q_STEPS
+        s = int(skin) % _SKIN_SLOTS
+        return s + aq * _SKIN_SLOTS
+
+    def _unpack_skin_angle(self, packed_skin: int) -> tuple[int, float]:
+        p = max(0, int(packed_skin))
+        skin = p % _SKIN_SLOTS
+        aq = p // _SKIN_SLOTS
+        angle = (aq % _ANGLE_Q_STEPS) * (360.0 / _ANGLE_Q_STEPS)
+        return skin, angle
+
+    def send(self, x, y, angle=0.0, skin=0, chunks=0, nick="", chat=""):
         raw_nick = nick.encode('utf-8')[:16].ljust(16, b'\x00')
         raw_chat = chat.encode('utf-8')[:48].ljust(48, b'\x00')
-        packet = struct.pack("!ffII16s48s", float(x), float(y), int(skin), int(chunks), raw_nick, raw_chat)
+        packed_skin = self._pack_skin_angle(int(skin), float(angle))
+        # Mantener wire-format legacy para compatibilidad LAN total.
+        packet = struct.pack("!ffII16s48s", float(x), float(y), packed_skin, int(chunks), raw_nick, raw_chat)
         self._last_packet = packet
         if self._sendto(packet):
             now = time.time()
@@ -69,14 +88,36 @@ class UDPLink:
             return dict(self._others)
 
     def _parse_state(self, data: bytes) -> dict:
-        n = len(data) // _PACKET
+        # Resolver ambigüedad cuando el tamaño total es múltiplo de ambos formatos.
+        if self._rx_packet_size in (_PACKET_EXT, _PACKET_LEG) and len(data) % self._rx_packet_size == 0:
+            packet_size = self._rx_packet_size
+        else:
+            ext_ok = (len(data) % _PACKET_EXT == 0)
+            leg_ok = (len(data) % _PACKET_LEG == 0)
+            if ext_ok and not leg_ok:
+                packet_size = _PACKET_EXT
+            elif leg_ok and not ext_ok:
+                packet_size = _PACKET_LEG
+            elif ext_ok and leg_ok:
+                packet_size = self._rx_packet_size or _PACKET_EXT
+            else:
+                return {}
+            self._rx_packet_size = packet_size
+        n = len(data) // packet_size
         others = {}
         for i in range(n):
-            chunk = data[i * _PACKET:(i + 1) * _PACKET]
-            pid, x, y, skin, chunks, raw_nick, raw_chat = struct.unpack("!IffII16s48s", chunk)
-            nick = raw_nick.rstrip(b'\x00').decode('utf-8', errors='replace')
-            chat = raw_chat.rstrip(b'\x00').decode('utf-8', errors='replace')
-            others[pid] = (x, y, skin, chunks, nick, chat)
+            chunk = data[i * packet_size:(i + 1) * packet_size]
+            if packet_size == _PACKET_EXT:
+                pid, x, y, angle_field, skin_raw, chunks, raw_nick, raw_chat = struct.unpack("!IfffII16s48s", chunk)
+                # Si el servidor ext no trae angle útil, intentar extraerlo de skin empaquetado.
+                skin, angle_packed = self._unpack_skin_angle(skin_raw)
+                angle = float(angle_field) if float(angle_field) != 0.0 else angle_packed
+            else:
+                pid, x, y, skin_raw, chunks, raw_nick, raw_chat = struct.unpack("!IffII16s48s", chunk)
+                skin, angle = self._unpack_skin_angle(skin_raw)
+            nick = raw_nick.rstrip(b'\x00').decode('utf-8', errors='replace').replace('\x00', '')
+            chat = raw_chat.rstrip(b'\x00').decode('utf-8', errors='replace').replace('\x00', '')
+            others[pid] = (x, y, angle, skin, chunks, nick, chat)
         return others
 
     def _recv_loop(self):
@@ -107,7 +148,7 @@ class UDPLink:
                         if not data:
                             continue
                         got_any = True
-                        if len(data) >= _PACKET:
+                        if len(data) >= _PACKET_LEG:
                             latest_state = data        # nos quedamos solo con el mas reciente
                         # data == b"\x00": heartbeat del servidor (jugador solo) -> solo "vivo"
 
