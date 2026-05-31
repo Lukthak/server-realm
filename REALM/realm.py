@@ -13,7 +13,7 @@ import pygame
 
 from config import (SERVER_IP, SERVER_PORT,
                     WIDTH, HEIGHT, MAP_WIDTH, MAP_HEIGHT, FPS, ICONO_PATH)
-from dialogs import (ask_nickname, open_chat_dialog, get_user_position, save_user_position,
+from dialogs import (ask_nickname, get_user_position, save_user_position,
                      get_user_bio, save_user_bio, open_bio_dialog,
                      get_user_max_chunks, save_user_max_chunks,
                      get_user_skin, save_user_skin,
@@ -74,7 +74,29 @@ def main():
     icon = load_icon(ICONO_PATH)
     if icon:
         pygame.display.set_icon(icon)
+    is_fullscreen = False
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    render_surface = pygame.Surface((WIDTH, HEIGHT)).convert_alpha()
+
+    def _compute_viewport(win_w: int, win_h: int):
+        scale = min(win_w / WIDTH, win_h / HEIGHT)
+        vw = max(1, int(WIDTH * scale))
+        vh = max(1, int(HEIGHT * scale))
+        vx = (win_w - vw) // 2
+        vy = (win_h - vh) // 2
+        return vx, vy, vw, vh
+
+    def _to_virtual(pos):
+        mx, my = pos
+        win_w, win_h = screen.get_size()
+        vx, vy, vw, vh = _compute_viewport(win_w, win_h)
+        if vw <= 0 or vh <= 0:
+            return None
+        if mx < vx or my < vy or mx >= vx + vw or my >= vy + vh:
+            return None
+        sx = (mx - vx) / vw
+        sy = (my - vy) / vh
+        return int(sx * WIDTH), int(sy * HEIGHT)
     pygame.display.set_caption("REALM")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 14)
@@ -94,9 +116,22 @@ def main():
     _chunks_all_time: int = get_user_max_chunks(nickname)
     total_chunks = _chunks_all_time
 
+    def _shutdown_and_exit():
+        save_user_position(nickname, player.x, player.y)
+        save_user_max_chunks(nickname, total_chunks)
+        save_user_skin(nickname, player.skin_index)
+        net.disconnect()
+        net.stop()
+        pygame.quit()
+        sys.exit()
+
     chat_msg: dict = {"text": "", "until": 0.0}
-    chat_queue: queue.Queue = queue.Queue()
-    chat_open = threading.Event()
+    chat_typing = False
+    chat_input = ""
+    chat_history: list[str] = []
+    chat_hist_idx = 0
+    chat_draft = ""
+    pending_chat_msg = None
 
     debug = False
     map_open = False
@@ -112,19 +147,20 @@ def main():
     bio_editing = threading.Event()
     cam_x = cam_y = 0
 
+    def _submit_chat_message(msg: str) -> None:
+        nonlocal pending_chat_msg
+        pending_chat_msg = msg
+
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                save_user_position(nickname, player.x, player.y)
-                save_user_max_chunks(nickname, total_chunks)
-                save_user_skin(nickname, player.skin_index)
-                net.disconnect()
-                net.stop()
-                pygame.quit()
-                sys.exit()
+                _shutdown_and_exit()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                mx, my = event.pos
+                mapped = _to_virtual(event.pos)
+                if mapped is None:
+                    continue
+                mx, my = mapped
                 if (profile and profile_btn_rect and
                         profile["name"] == nickname and
                         profile_btn_rect.collidepoint(mx, my) and
@@ -169,27 +205,69 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_F3:
                     debug = not debug
+                elif event.key == pygame.K_ESCAPE:
+                    _shutdown_and_exit()
+                elif event.key == pygame.K_F11:
+                    is_fullscreen = not is_fullscreen
+                    if is_fullscreen:
+                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                    else:
+                        screen = pygame.display.set_mode((WIDTH, HEIGHT))
                 elif event.key == pygame.K_m:
                     map_open = not map_open
                     if map_open:
                         profile = None
-                elif event.key == pygame.K_RETURN and not chat_open.is_set():
-                    chat_open.set()
-                    threading.Thread(
-                        target=open_chat_dialog,
-                        args=(chat_queue, chat_open),
-                        daemon=True,
-                    ).start()
+                elif event.key == pygame.K_RETURN:
+                    if chat_typing:
+                        text = chat_input.strip()[:48]
+                        if text:
+                            chat_history.append(text)
+                            if len(chat_history) > 50:
+                                del chat_history[:-50]
+                            _submit_chat_message(text)
+                        chat_typing = False
+                        chat_input = ""
+                        chat_hist_idx = len(chat_history)
+                        chat_draft = ""
+                    else:
+                        chat_typing = True
+                        chat_input = ""
+                        chat_hist_idx = len(chat_history)
+                        chat_draft = ""
+                elif chat_typing and event.key == pygame.K_BACKSPACE:
+                    chat_input = chat_input[:-1]
+                elif chat_typing and event.key == pygame.K_UP:
+                    if chat_history:
+                        if chat_hist_idx == len(chat_history):
+                            chat_draft = chat_input
+                        if chat_hist_idx > 0:
+                            chat_hist_idx -= 1
+                            chat_input = chat_history[chat_hist_idx]
+                elif chat_typing and event.key == pygame.K_DOWN:
+                    if chat_history:
+                        if chat_hist_idx < len(chat_history) - 1:
+                            chat_hist_idx += 1
+                            chat_input = chat_history[chat_hist_idx]
+                        elif chat_hist_idx == len(chat_history) - 1:
+                            chat_hist_idx = len(chat_history)
+                            chat_input = chat_draft
+                elif chat_typing:
+                    ch = event.unicode or ""
+                    if ch.isprintable() and ch not in ("\r", "\n"):
+                        if len(chat_input) < 48:
+                            chat_input += ch
 
             elif event.type == pygame.MOUSEWHEEL and map_open:
                 minimap_range = max(100, int(minimap_range * (0.8 if event.y > 0 else 1.25)))
 
-            player.handle_event(event)
+            if not chat_typing:
+                player.handle_event(event)
 
-        try:
-            msg = chat_queue.get_nowait()
+        if pending_chat_msg:
+            msg = pending_chat_msg
+            pending_chat_msg = None
             if msg:
-                raw = msg.strip()
+                raw = str(msg).strip()
                 cmd = raw.lower()
                 if cmd == "/blackhole":
                     dest = universe.find_nearby_blackhole(player.x, player.y)
@@ -209,6 +287,17 @@ def main():
                     player.vy = 0.0
                     chat_msg["text"] = ">> Regresaste al hub"
                     chat_msg["until"] = time.time() + 3.0
+                elif cmd == "/sun":
+                    dest = universe.find_nearby_sun(player.x, player.y)
+                    if dest:
+                        player.x, player.y = float(dest[0]), float(dest[1])
+                        player.vx = 0.0
+                        player.vy = 0.0
+                        chat_msg["text"] = ">> Viajando a un sol cercano..."
+                        chat_msg["until"] = time.time() + 3.0
+                    else:
+                        chat_msg["text"] = ">> No hay soles cercanos"
+                        chat_msg["until"] = time.time() + 3.0
                 elif cmd.startswith("/tp"):
                     parts = raw.split(maxsplit=1)
                     target_name = parts[1].strip() if len(parts) > 1 else ""
@@ -236,8 +325,6 @@ def main():
                 else:
                     chat_msg["text"] = msg
                     chat_msg["until"] = float("inf")
-        except queue.Empty:
-            pass
 
         try:
             new_bio = bio_queue.get_nowait()
@@ -258,6 +345,8 @@ def main():
             continue
 
         keys = pygame.key.get_pressed()
+        if chat_typing:
+            keys = [False] * len(keys)
         if any(keys[k] for k in (pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d)):
             if chat_msg["text"] and chat_msg["until"] == float("inf"):
                 chat_msg["until"] = time.time() + 5.0
@@ -269,19 +358,37 @@ def main():
 
         current_chat = chat_msg["text"] if time.time() < chat_msg["until"] else ""
         net.send(player.x, player.y, player.angle, player.skin_index, total_chunks, nickname,
-                 "\x01" if chat_open.is_set() else current_chat)
+                 "\x01" if chat_typing else current_chat)
 
         cam_x, cam_y = player.get_camera(WIDTH, HEIGHT)
 
         if map_open:
-            draw_minimap(screen, player.x, player.y, net.get_others(), minimap_range)
+            draw_minimap(render_surface, player.x, player.y, net.get_others(), minimap_range)
         else:
-            universe.draw(screen, cam_x, cam_y)
-            draw_players(screen, net.get_others(), cam_x, cam_y, nick_font, ghost_sprites)
-            draw_local_player(screen, player, nickname, cam_x, cam_y, nick_font,
-                              chat_open.is_set(), current_chat)
+            universe.draw(render_surface, cam_x, cam_y)
+            sun_tint_color, sun_tint_amount, player_brightness = universe.get_player_light()
+            draw_players(render_surface, net.get_others(), cam_x, cam_y, nick_font, ghost_sprites)
+            draw_local_player(render_surface, player, nickname, cam_x, cam_y, nick_font,
+                              chat_typing, current_chat,
+                              tint_color=sun_tint_color, tint_amount=sun_tint_amount,
+                              brightness=player_brightness)
             if debug:
-                draw_debug(screen, universe, cam_x, cam_y, font, chunk_coord, _ping_stats["tcp_ms"])
+                draw_debug(render_surface, universe, cam_x, cam_y, font, chunk_coord, _ping_stats["tcp_ms"])
+
+        if chat_typing:
+            box_w = int(WIDTH * 0.58)
+            box_h = 28
+            box_x = (WIDTH - box_w) // 2
+            box_y = HEIGHT - box_h - 14
+            box = pygame.Rect(box_x, box_y, box_w, box_h)
+            pygame.draw.rect(render_surface, (0, 0, 0), box)
+            pygame.draw.rect(render_surface, (90, 90, 105), box, 1)
+            prompt = "> " + chat_input
+            show_cursor = int(time.time() * 2) % 2 == 0
+            if show_cursor and len(prompt) < 49:
+                prompt += "_"
+            txt = nick_font.render(prompt, True, (220, 220, 235))
+            render_surface.blit(txt, (box_x + 8, box_y + (box_h - txt.get_height()) // 2))
 
         if profile:
             panel_h = HEIGHT // 2
@@ -289,7 +396,7 @@ def main():
             offset_y = int(-panel_h + panel_h * (1.0 - (1.0 - t) ** 3))
             own = profile["name"] == nickname
             profile_btn_rect = draw_profile_panel(
-                screen, profile["name"], profile["sprite"],
+                render_surface, profile["name"], profile["sprite"],
                 offset_y, profile_data["bio"], profile_data["max_dist"], own,
             )
 
@@ -316,10 +423,18 @@ def main():
                 _popup_shown.clear()
             threading.Thread(target=_show_popup, daemon=True).start()
 
+        win_w, win_h = screen.get_size()
+        vx, vy, vw, vh = _compute_viewport(win_w, win_h)
+        if vw == WIDTH and vh == HEIGHT:
+            screen.blit(render_surface, (0, 0))
+        else:
+            scaled = pygame.transform.smoothscale(render_surface, (vw, vh))
+            screen.fill((0, 0, 0))
+            screen.blit(scaled, (vx, vy))
+
         pygame.display.flip()
         clock.tick(FPS)
 
 
 if __name__ == "__main__":
     main()
-

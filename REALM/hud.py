@@ -237,9 +237,13 @@ def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites) -> Non
 
 
 def draw_local_player(surface, player, nickname, cam_x, cam_y, nick_font,
-                      is_typing: bool, current_chat: str) -> None:
+                      is_typing: bool, current_chat: str,
+                      tint_color=None, tint_amount: float = 0.0,
+                      brightness: float = 1.0) -> None:
     """Dibuja el jugador local con nick y burbuja/dots."""
-    player.draw(surface, cam_x, cam_y)
+    player.draw(surface, cam_x, cam_y,
+                tint_color=tint_color, tint_amount=tint_amount,
+                brightness=brightness)
     if hasattr(player, "get_label_anchor"):
         pcx, pbottom = player.get_label_anchor(cam_x, cam_y)
         pcy = pbottom - getattr(player, "base_h", player.h)

@@ -196,10 +196,30 @@ class Sonda:
         cam_y = int(cy_world - screen_h // 2)
         return cam_x, cam_y
 
-    def draw(self, surface, cam_x, cam_y):
+    def draw(self, surface, cam_x, cam_y, tint_color=None, tint_amount=0.0,
+             brightness=1.0):
         cx_world, cy_world = self._world_center()
         cx_screen = int(cx_world - cam_x)
         cy_screen = int(cy_world - cam_y)
         sx = cx_screen - self.w // 2
         sy = cy_screen - self.h // 2
-        surface.blit(self.image, (sx, sy))
+        out = self.image
+        need_copy = (tint_color and tint_amount > 0.0) or brightness < 0.999
+        if need_copy:
+            out = self.image.copy()
+
+        if tint_color and tint_amount > 0.0:
+            tr, tg, tb = tint_color
+            amt = max(0.0, min(1.0, float(tint_amount)))
+            overlay = pygame.Surface(out.get_size(), pygame.SRCALPHA)
+            overlay.fill((int(tr * amt), int(tg * amt), int(tb * amt), 0))
+            out.blit(overlay, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        if brightness < 0.999:
+            b = max(0.0, min(1.0, float(brightness)))
+            mult = pygame.Surface(out.get_size(), pygame.SRCALPHA)
+            m = int(255 * b)
+            mult.fill((m, m, m, 255))
+            out.blit(mult, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+        surface.blit(out, (sx, sy))

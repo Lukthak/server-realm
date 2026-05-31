@@ -5,7 +5,7 @@ import matplotlib.widgets as mwidgets
 from matplotlib.colors import LinearSegmentedColormap
 
 # ── Parámetros fijos ──────────────────────────────────────────────────────────
-STARS_PER_ARM  = 1200
+STARS_PER_ARM  = 6000
 CORE_STARS     = 800
 DUST_PARTICLES = 600
 GALAXY_RADIUS  = 10.0

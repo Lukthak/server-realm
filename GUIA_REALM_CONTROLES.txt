@@ -1,0 +1,68 @@
+REALM - Documentacion y Controles
+================================
+
+Descripcion general
+-------------------
+REALM es un juego espacial 2D con exploracion por chunks, juego LAN, chat,
+black holes y soles gigantes con efectos visuales dinamicos.
+
+Objetivo rapido
+---------------
+- Explorar el mapa.
+- Descubrir chunks y aumentar distancia recorrida.
+- Encontrar black holes y soles.
+- Jugar en LAN con otros jugadores.
+
+Controles de movimiento
+-----------------------
+- W / A / S / D : mover nave (con inercia)
+- Q / E         : rotar nave
+- ESPACIO       : freno manual
+- Flecha IZQ/DER: cambiar skin de la nave
+
+Controles de interfaz
+---------------------
+- ENTER : abrir chat en juego / enviar mensaje
+- ESC   : cerrar el juego
+- F3    : debug overlay
+- M     : abrir/cerrar minimapa
+- F11   : fullscreen on/off (escalado centrado con bandas negras)
+- Rueda mouse en minimapa : zoom
+
+Chat (in-game)
+--------------
+- ENTER abre el cuadro de chat dentro del juego.
+- ENTER envia el mensaje.
+- ESC cancela escritura.
+- Flechas ARRIBA/ABAJO recorren historial de mensajes.
+- Mientras escribes, la red envia estado "typing".
+
+Comandos de chat
+----------------
+- /hub        : regresa al centro del mapa
+- /blackhole  : te lleva a un black hole cercano
+- /sun        : te lleva a un sol cercano
+- /tp nombre  : te teletransporta al jugador indicado
+
+Efectos visuales relevantes
+---------------------------
+- Cerca de un black hole:
+  - El fondo se oscurece progresivamente.
+  - El sprite local baja bastante su brillo.
+- Cerca de un sol:
+  - El fondo se tiñe con el color del sol.
+  - Las estrellas se blanquean gradualmente.
+  - Aparece efecto fantasmal en estrellas (se desvanece al alejarse).
+  - El sprite local gana luz y tinte hacia blanco.
+
+Red / Multiplayer
+-----------------
+- El juego usa UDP para estado en tiempo real.
+- Muestra jugadores remotos, rotacion, skin, chat y typing.
+- Si se pierde conexion, muestra popup y cierra el juego.
+
+Notas de ejecucion
+------------------
+- Script principal: Realm/realm.py
+- Generador visual de soles: Realm/stars-bright.py
+- Configuracion de servidor: Realm/config.py

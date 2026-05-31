@@ -1,9 +1,12 @@
 import pygame
 import random
 import math
+from dataclasses import dataclass
 
 BG_COLOR = (15, 5, 25)
 NUM_STARS = 400
+BRIGHT_STAR_CHANCE = 0.0025
+BRIGHT_STAR_PARALLAX = 0.18
 
 # Estrellas fugaces normales
 MAX_SHOOTING_STARS = 8
@@ -14,6 +17,179 @@ SHOOTING_TRAIL = 10
 MAX_FAR_SHOOTING_STARS = 12
 FAR_SHOOTING_SPAWN_CHANCE = 0.06
 FAR_SHOOTING_TRAIL = 6
+
+
+@dataclass
+class BrightStar:
+    kind: str
+    x: int
+    y: int
+    radius: int
+    color: tuple[int, int, int]
+    pulse_speed: float
+    pulse_offset: float
+    planets: list["Planet"]
+
+
+@dataclass
+class Planet:
+    orbit_radius: float
+    orbit_speed: float
+    radius: int
+    color: tuple[int, int, int]
+    angle: float
+    vertical_tilt: float
+    depth_strength: float
+    moons: list["Moon"]
+
+
+@dataclass
+class Moon:
+    orbit_radius: float
+    orbit_speed: float
+    radius: int
+    color: tuple[int, int, int]
+    angle: float
+
+
+BRIGHT_STAR_TYPES: list[tuple[str, tuple[int, int, int], tuple[int, int]]] = [
+    ("azul", (95, 155, 255), (7, 11)),
+    ("roja", (255, 88, 88), (4, 7)),
+    ("naranja", (255, 168, 65), (5, 8)),
+    ("celeste", (145, 235, 255), (6, 10)),
+]
+
+
+def _towards_white(color: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    if amount <= 0.0:
+        return color
+    a = max(0.0, min(1.0, amount))
+    r, g, b = color
+    return (
+        int(r + (255 - r) * a),
+        int(g + (255 - g) * a),
+        int(b + (255 - b) * a),
+    )
+
+
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return lo if v < lo else hi if v > hi else v
+
+
+def _create_bright_star(rng: random.Random, x: int, y: int) -> BrightStar:
+    kind, color, size_range = rng.choice(BRIGHT_STAR_TYPES)
+    radius = rng.randint(size_range[0], size_range[1])
+    return BrightStar(
+        kind=kind,
+        x=x,
+        y=y,
+        radius=radius,
+        color=color,
+        pulse_speed=rng.uniform(1.2, 3.2),
+        pulse_offset=rng.uniform(0.0, math.tau),
+        planets=_create_planets(rng, kind, radius),
+    )
+
+
+def _create_moons(rng: random.Random, planet_radius: int) -> list[Moon]:
+    if planet_radius <= 2:
+        moon_count = 0
+    elif planet_radius == 3:
+        moon_count = rng.randint(0, 1)
+    elif planet_radius == 4:
+        moon_count = rng.randint(1, 2)
+    elif planet_radius == 5:
+        moon_count = rng.randint(2, 3)
+    elif planet_radius == 6:
+        moon_count = rng.randint(3, 5)
+    else:
+        moon_count = rng.randint(5, 8)
+
+    moons: list[Moon] = []
+    for index in range(moon_count):
+        orbit_radius = planet_radius * 2.2 + index * rng.uniform(1.8, 3.0)
+        orbit_speed = rng.uniform(1.0, 2.8) / max(1.0, orbit_radius / planet_radius)
+        moons.append(
+            Moon(
+                orbit_radius=orbit_radius,
+                orbit_speed=orbit_speed,
+                radius=1,
+                color=(220, 220, 220),
+                angle=rng.uniform(0.0, math.tau),
+            )
+        )
+    return moons
+
+
+def _create_planets(rng: random.Random, kind: str, star_radius: int) -> list[Planet]:
+    if kind == "azul":
+        planet_count = rng.randint(3, 5)
+        orbit_base = star_radius * 4.5
+    elif kind == "celeste":
+        planet_count = rng.randint(2, 4)
+        orbit_base = star_radius * 4.0
+    elif kind == "naranja":
+        planet_count = rng.randint(1, 3)
+        orbit_base = star_radius * 3.5
+    else:
+        planet_count = rng.randint(0, 2)
+        orbit_base = star_radius * 3.0
+
+    palette = [
+        (170, 170, 190),
+        (120, 185, 120),
+        (190, 145, 110),
+        (110, 160, 210),
+        (220, 210, 170),
+    ]
+
+    planets: list[Planet] = []
+    for index in range(planet_count):
+        orbit_radius = orbit_base + index * rng.uniform(star_radius * 1.5, star_radius * 2.2)
+        orbit_speed = rng.uniform(0.35, 1.15) / max(1.0, orbit_radius / star_radius)
+        planet_radius = rng.randint(2, 4 if kind in {"azul", "celeste"} else 3)
+        planets.append(
+            Planet(
+                orbit_radius=orbit_radius,
+                orbit_speed=orbit_speed,
+                radius=planet_radius,
+                color=rng.choice(palette),
+                angle=rng.uniform(0.0, math.tau),
+                vertical_tilt=rng.uniform(0.25, 0.55),
+                depth_strength=rng.uniform(0.35, 0.75),
+                moons=_create_moons(rng, planet_radius),
+            )
+        )
+    return planets
+
+
+def _draw_bright_planets(surface: pygame.Surface, star: BrightStar, t: float,
+                         cx: int, cy: int, white_shift: float,
+                         front_only: bool | None = None) -> None:
+    for planet in star.planets:
+        angle = planet.angle + t * planet.orbit_speed
+        depth = math.sin(angle)
+        is_front = depth >= 0.0
+
+        if front_only is True and not is_front:
+            continue
+        if front_only is False and is_front:
+            continue
+
+        px = int(cx + math.cos(angle) * planet.orbit_radius)
+        py = int(cy + math.sin(angle) * planet.orbit_radius * planet.vertical_tilt)
+        depth_scale = 0.52 + ((depth + 1.0) * 0.5) * planet.depth_strength
+        scaled_radius = max(1, int(planet.radius * depth_scale))
+
+        pcolor = _towards_white(planet.color, white_shift)
+        pygame.draw.circle(surface, pcolor, (px, py), scaled_radius)
+
+        for moon in planet.moons:
+            moon_angle = moon.angle + t * moon.orbit_speed
+            mx = int(px + math.cos(moon_angle) * moon.orbit_radius)
+            my = int(py + math.sin(moon_angle) * moon.orbit_radius * 0.6)
+            mcolor = _towards_white(moon.color, white_shift)
+            pygame.draw.circle(surface, mcolor, (mx, my), moon.radius)
 
 
 class ShootingStar:
@@ -60,7 +236,7 @@ class ShootingStar:
                     self.alive = False
                     break
 
-    def draw(self, surface, cam_x, cam_y):
+    def draw(self, surface, cam_x, cam_y, white_shift: float = 0.0):
         count = len(self.trail)
         if count < 2:
             return
@@ -77,6 +253,7 @@ class ShootingStar:
             brightness = int(t * max_brightness)
             brightness = min(255, brightness)
             color = (brightness, int(brightness * 0.6), brightness)
+            color = _towards_white(color, white_shift)
             x1 = int(self.trail[i - 1][0] - cam_x)
             y1 = int(self.trail[i - 1][1] - cam_y)
             x2 = int(self.trail[i][0] - cam_x)
@@ -90,7 +267,8 @@ class ShootingStar:
             hy = int(self.y - cam_y)
             if 0 <= hx < w and 0 <= hy < h:
                 head_b = min(255, max_brightness + 30)
-                surface.set_at((hx, hy), (head_b, head_b - 5, head_b))
+                head_color = _towards_white((head_b, head_b - 5, head_b), white_shift)
+                surface.set_at((hx, hy), head_color)
 
 
 class FarShootingStar:
@@ -132,7 +310,7 @@ class FarShootingStar:
             else:
                 self.alive = False
 
-    def draw(self, surface, cam_x, cam_y):
+    def draw(self, surface, cam_x, cam_y, white_shift: float = 0.0):
         count = len(self.trail)
         if count < 2:
             return
@@ -147,6 +325,7 @@ class FarShootingStar:
             t = i / count
             brightness = int(t * max_brightness)
             color = (brightness, int(brightness * 0.55), brightness)
+            color = _towards_white(color, white_shift)
             x1 = int(self.trail[i - 1][0] - cx)
             y1 = int(self.trail[i - 1][1] - cy)
             x2 = int(self.trail[i][0] - cx)
@@ -387,7 +566,7 @@ class Background:
         self.map_h = map_height
         self.screen_w = screen_width
         self.screen_h = screen_height
-        self.stars = self._generate(map_width, map_height, seed)
+        self.stars, self.bright_stars = self._generate(map_width, map_height, seed)
         self.shooting_stars = []
         self.far_shooting_stars = []
         self.tick = 0
@@ -395,6 +574,16 @@ class Background:
     def _generate(self, map_w, map_h, seed=None):
         rng = random.Random(seed)
         stars = []
+        bright_stars = []
+
+        # Prueba forzada: una estrella gigante en (0, 0) del chunk (0,0).
+        if seed == 0:
+            bright_stars.append(_create_bright_star(rng, 0, 0))
+        elif rng.random() < BRIGHT_STAR_CHANCE:
+            bx = rng.randint(0, map_w - 1)
+            by = rng.randint(0, map_h - 1)
+            bright_stars.append(_create_bright_star(rng, bx, by))
+
         for _ in range(NUM_STARS):
             sx = rng.randint(0, map_w - 1)
             sy = rng.randint(0, map_h - 1)
@@ -403,10 +592,23 @@ class Background:
             color = (brightness, brightness - 20, min(255, brightness + 10))
             phase = rng.uniform(0, math.pi * 2)
             stars.append((sx, sy, size, color, phase))
-        return stars
+        return stars, bright_stars
 
-    def _draw_star(self, surface, sx, sy, size, color, glow):
-        gc = (glow // 2, glow // 4, glow)
+    def _draw_star(self, surface, sx, sy, size, color, glow, white_shift: float = 0.0,
+                   ghost_dx: int = 0, ghost_dy: int = 0, ghost_amount: float = 0.0):
+        gc = _towards_white((glow // 2, glow // 4, glow), white_shift)
+        color = _towards_white(color, white_shift)
+        if ghost_amount > 0.0 and (ghost_dx != 0 or ghost_dy != 0):
+            gx = sx + ghost_dx
+            gy = sy + ghost_dy
+            if -4 <= gx <= self.screen_w + 4 and -4 <= gy <= self.screen_h + 4:
+                ghost_c = _towards_white(gc, min(1.0, ghost_amount * 0.9))
+                surface.set_at((gx, gy), ghost_c)
+                if size >= 2:
+                    if 0 <= gx + 1 < self.screen_w and 0 <= gy < self.screen_h:
+                        surface.set_at((gx + 1, gy), ghost_c)
+                    if 0 <= gx < self.screen_w and 0 <= gy + 1 < self.screen_h:
+                        surface.set_at((gx, gy + 1), ghost_c)
         surface.set_at((sx, sy - 1), gc)
         surface.set_at((sx, sy + 1), gc)
         surface.set_at((sx - 1, sy), gc)
@@ -416,6 +618,67 @@ class Background:
             surface.set_at((sx + 1, sy), color)
             surface.set_at((sx, sy + 1), color)
             surface.set_at((sx + 1, sy + 1), color)
+
+    def _draw_bright_star(self, surface: pygame.Surface, star: BrightStar, t: float,
+                          cx: int, cy: int, bg_color: tuple[int, int, int],
+                          white_shift: float = 0.0, ghost_dx: int = 0,
+                          ghost_dy: int = 0, ghost_amount: float = 0.0) -> None:
+        shimmer_radius = int(star.radius * 3.2)
+        shimmer_size = shimmer_radius * 2 + 6
+        shimmer = pygame.Surface((shimmer_size, shimmer_size), pygame.SRCALPHA)
+        scx = shimmer_size // 2
+        scy = shimmer_size // 2
+
+        band_count = 34
+        for band in range(band_count):
+            start_y = scy - int(star.radius * 2.8)
+            step = int((star.radius * 5.6) / max(1, band_count - 1))
+            y_base = start_y + band * max(1, step)
+            phase = t * (2.5 + star.pulse_speed * 0.5) + band * 0.9 + star.pulse_offset
+
+            points: list[tuple[int, int]] = []
+            for x in range(0, shimmer_size):
+                dx = abs(x - scx)
+                envelope = max(0.0, 1.0 - dx / max(1, shimmer_radius))
+                wave = math.sin(x * 0.18 + phase) * (0.75 + star.radius * 0.05) * envelope
+                points.append((x, int(y_base + wave)))
+
+            alpha = max(28, min(96, int(40 + (math.sin(phase) + 1.0) * 18 + (math.sin(t * 1.6 + band) + 1.0) * 10)))
+            if len(points) > 1:
+                pygame.draw.aalines(shimmer, (*bg_color, alpha), False, points)
+
+                soft_points = [(px, py + 1) for px, py in points]
+                soft_alpha = max(4, alpha // 4)
+                pygame.draw.aalines(shimmer, (*bg_color, soft_alpha), False, soft_points)
+
+        glow_surface = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
+
+        pulse = (math.sin(t * star.pulse_speed + star.pulse_offset) + 1.0) * 0.5
+        outer_alpha = int(18 + pulse * 24)
+        mid_alpha = int(36 + pulse * 38)
+        outer_r = int(star.radius * 2.7)
+        mid_r = int(star.radius * 1.8)
+        star_color = _towards_white(star.color, white_shift)
+
+        # Planetas traseros primero para que la estrella los oculte parcialmente.
+        _draw_bright_planets(surface, star, t, cx, cy, white_shift, front_only=False)
+
+        pygame.draw.circle(glow_surface, (*star_color, outer_alpha), (cx, cy), outer_r)
+        pygame.draw.circle(glow_surface, (*star_color, mid_alpha), (cx, cy), mid_r)
+        if ghost_amount > 0.0 and (ghost_dx != 0 or ghost_dy != 0):
+            ghost_alpha = int((12 + 36 * ghost_amount) * 0.7)
+            gx = cx + ghost_dx
+            gy = cy + ghost_dy
+            pygame.draw.circle(glow_surface, (255, 255, 255, ghost_alpha), (gx, gy), max(3, int(star.radius * 1.2)))
+        surface.blit(glow_surface, (0, 0))
+
+        pygame.draw.circle(surface, star_color, (cx, cy), star.radius)
+        core_radius = max(2, int(star.radius * 0.55))
+        pygame.draw.circle(surface, (255, 255, 255), (cx, cy), core_radius)
+        surface.blit(shimmer, (cx - scx, cy - scy))
+
+        # Planetas delanteros después del shimmer para sensación de profundidad.
+        _draw_bright_planets(surface, star, t, cx, cy, white_shift, front_only=True)
 
     def _update_shooting_stars(self):
         for ss in self.shooting_stars:
@@ -432,10 +695,39 @@ class Background:
                 and random.random() < FAR_SHOOTING_SPAWN_CHANCE):
             self.far_shooting_stars.append(FarShootingStar(self.map_w, self.map_h))
 
-    def draw(self, surface, cam_x, cam_y):
+    def draw(self, surface, cam_x, cam_y, bg_color=BG_COLOR,
+             world_x=0, world_y=0, global_cam_x=None, global_cam_y=None,
+             white_shift: float = 0.0, cam_dx: float = 0.0, cam_dy: float = 0.0):
         # El fill lo hace el caller (Universe)
         t = self.tick * 0.04
+        bright_t = pygame.time.get_ticks() / 1000.0
         self.tick += 1
+
+        if global_cam_x is None:
+            global_cam_x = cam_x + world_x
+        if global_cam_y is None:
+            global_cam_y = cam_y + world_y
+
+        ghost_amount = max(0.0, min(1.0, (white_shift - 0.18) * 2.30))
+        ghost_dx_norm = _clamp(int(cam_dx * 0.65), -5, 5)
+        ghost_dy_norm = _clamp(int(cam_dy * 0.65), -5, 5)
+        ghost_dx_far = _clamp(int(cam_dx * BRIGHT_STAR_PARALLAX * 0.9), -3, 3)
+        ghost_dy_far = _clamp(int(cam_dy * BRIGHT_STAR_PARALLAX * 0.9), -3, 3)
+
+        # Estrellas gigantes en capa lejana (parallax bajo): fondo más atrás.
+        cam_cx = global_cam_x + self.screen_w / 2
+        cam_cy = global_cam_y + self.screen_h / 2
+        for star in self.bright_stars:
+            wx = world_x + star.x
+            wy = world_y + star.y
+            rx = int((wx - cam_cx) * BRIGHT_STAR_PARALLAX + self.screen_w / 2)
+            ry = int((wy - cam_cy) * BRIGHT_STAR_PARALLAX + self.screen_h / 2)
+            pad = int(star.radius * 4)
+            if -pad <= rx <= self.screen_w + pad and -pad <= ry <= self.screen_h + pad:
+                self._draw_bright_star(
+                    surface, star, bright_t, rx, ry, bg_color, white_shift,
+                    ghost_dx_far, ghost_dy_far, ghost_amount,
+                )
 
         # Capa normal: 1:1 con la cámara
         for sx, sy, size, color, phase in self.stars:
@@ -443,12 +735,15 @@ class Background:
             ry = sy - cam_y
             if -4 <= rx <= self.screen_w + 4 and -4 <= ry <= self.screen_h + 4:
                 glow = int((math.sin(t + phase) * 0.5 + 0.5) * 200)
-                self._draw_star(surface, rx, ry, size, color, glow)
+                self._draw_star(
+                    surface, rx, ry, size, color, glow, white_shift,
+                    ghost_dx_norm, ghost_dy_norm, ghost_amount,
+                )
 
         # Estrellas fugaces
         self._update_shooting_stars()
         for fs in self.far_shooting_stars:
-            fs.draw(surface, cam_x, cam_y)
+            fs.draw(surface, cam_x, cam_y, white_shift)
         for ss in self.shooting_stars:
-            ss.draw(surface, cam_x, cam_y)
+            ss.draw(surface, cam_x, cam_y, white_shift)
 
