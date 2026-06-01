@@ -1,5 +1,7 @@
 RealmHeaven Versioning
 
+# Cuando se haga un PUSH simplemente tendra el numero de la version, aqui ira todo detallado #
+
 1) 0.9.0-alpha.1
    Date: 2026-05-31
    Stage: Internal alpha baseline

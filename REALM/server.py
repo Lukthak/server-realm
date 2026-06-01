@@ -293,6 +293,11 @@ class _AuthHandler(BaseHTTPRequestHandler):
                     _save_user(user, entry)
                     self._respond({"ok": True})
 
+                elif path == "online":
+                    with lock:
+                        online_count = len(clients)
+                    self._respond({"ok": True, "online": online_count})
+
                 else:
                     self._respond({"ok": False, "msg": f"unknown action: {path}"})
         except Exception as ex:
@@ -315,6 +320,7 @@ PACKET_IN_EXT = 84   # float x + float y + float angle + uint32 skin + uint32 ch
 PACKET_PLAYER_LEG = 84   # uint32 id + float x + float y + uint32 skin + uint32 chunks + 16s nick + 48s chat
 PACKET_PLAYER_EXT = 88   # uint32 id + float x + float y + float angle + uint32 skin + uint32 chunks + 16s nick + 48s chat
 FORCE_EXT_PROTOCOL = False
+_PROBE_NICK_PREFIX = "radio_probe"
 
 clients = {}
 next_id = 1
@@ -470,15 +476,43 @@ def run(bind_ip="0.0.0.0"):
                 angle = 0.0
                 fmt = "leg"
 
+            nick = raw_nick.rstrip(b'\x00').decode('utf-8', errors='replace')
+            chat = raw_chat.rstrip(b'\x00').decode('utf-8', errors='replace')
+
+            # Sondeo de Radio: responder snapshot sin registrarlo ni loguearlo.
+            if nick.lower().startswith(_PROBE_NICK_PREFIX):
+                with lock:
+                    _cleanup(time.time())
+                    recipient_fmt = "ext" if FORCE_EXT_PROTOCOL else fmt
+                    if recipient_fmt == "ext":
+                        response = b"".join(
+                            struct.pack("!IfffII16s48s", c["id"], c["x"], c["y"], c.get("angle", 0.0), c["skin"], c["chunks"],
+                                        c["nick"].encode('utf-8')[:16].ljust(16, b'\x00'),
+                                        c["chat"].encode('utf-8')[:48].ljust(48, b'\x00'))
+                            for a, c in clients.items()
+                            if a != addr
+                        )
+                    else:
+                        response = b"".join(
+                            struct.pack("!IffII16s48s", c["id"], c["x"], c["y"], c["skin"], c["chunks"],
+                                        c["nick"].encode('utf-8')[:16].ljust(16, b'\x00'),
+                                        c["chat"].encode('utf-8')[:48].ljust(48, b'\x00'))
+                            for a, c in clients.items()
+                            if a != addr
+                        )
+
+                if response:
+                    sock.sendto(response, addr)
+                else:
+                    sock.sendto(b"\x00", addr)
+                continue
+
             if skin == 0xFFFFFFFF:
                 with lock:
                     if addr in clients:
                         print(f"{clients[addr]['nick']} se desconecto.")
                         del clients[addr]
                 continue
-
-            nick = raw_nick.rstrip(b'\x00').decode('utf-8', errors='replace')
-            chat = raw_chat.rstrip(b'\x00').decode('utf-8', errors='replace')
             now = time.time()
 
             with lock:

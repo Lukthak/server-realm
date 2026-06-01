@@ -7,6 +7,7 @@ import re
 import shutil
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import tempfile
@@ -191,6 +192,9 @@ class RadioApp:
         self._sleep_blocked = False
         self._realm_process: subprocess.Popen | None = None
         self._realm_ip: str = "159.223.107.32"
+        self.realm_online_var = tk.StringVar(value="")
+        self._realm_online_inflight = False
+        self._realm_online_job: str | None = None
 
         self._build_ui()
 
@@ -345,15 +349,28 @@ class RadioApp:
             bg="#6f1d1b",
             fg="#f7e7a9",
         ).pack(side="left")
+
+        realm_box = tk.Frame(bottom_row, bg="#6f1d1b")
+        realm_box.pack(side="right")
+
+        tk.Label(
+            realm_box,
+            textvariable=self.realm_online_var,
+            font=("Segoe UI", 8, "bold"),
+            bg="#6f1d1b",
+            fg="#f7e7a9",
+            anchor="e",
+        ).pack(side="top", anchor="e")
+
         realm_lbl = tk.Label(
-            bottom_row,
+            realm_box,
             text="REALM",
             font=("Segoe UI", 9, "bold"),
             bg="#6f1d1b",
             fg="#f7e7a9",
             cursor="hand2",
         )
-        realm_lbl.pack(side="right")
+        realm_lbl.pack(side="top", anchor="e")
         realm_lbl.bind("<Button-1>", lambda _e: self._launch_realm())
 
         self.listbox.bind("<Double-1>", lambda _event: self.toggle_play_pause())
@@ -369,6 +386,78 @@ class RadioApp:
         self.root.bind("<F12>", lambda _e: self._change_realm_ip())
         self._animate_station_title()
         self._schedule_speed_update()
+        self._schedule_realm_online_update()
+
+    def _schedule_realm_online_update(self) -> None:
+        if not self._realm_online_inflight:
+            self._realm_online_inflight = True
+            threading.Thread(target=self._fetch_realm_online_worker, daemon=True).start()
+        self._realm_online_job = self.root.after(2500, self._schedule_realm_online_update)
+
+    def _fetch_realm_online_worker(self) -> None:
+        text = ""
+        try:
+            req = urllib.request.Request(
+                f"http://{self._realm_ip}:5556/online",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                payload = json.loads(resp.read())
+            if payload.get("ok"):
+                n = int(payload.get("online", 0))
+                label = "jugador" if n == 1 else "jugadores"
+                text = f"{n} {label}"
+        except Exception:
+            # Fallback: si el HTTP de auth (5556) no responde desde remoto,
+            # consultar por UDP (5555) como contador best-effort.
+            udp_count = self._probe_realm_online_udp()
+            if udp_count is not None:
+                label = "jugador" if udp_count == 1 else "jugadores"
+                text = f"{udp_count} {label}"
+            else:
+                text = ""
+
+        def _apply() -> None:
+            self.realm_online_var.set(text)
+            self._realm_online_inflight = False
+
+        self.root.after(0, _apply)
+
+    def _probe_realm_online_udp(self) -> int | None:
+        """Cuenta jugadores conectados leyendo el snapshot UDP del server.
+
+        Retorna:
+        - int: cantidad de jugadores visibles
+        - None: no se pudo consultar
+        """
+        addr = (self._realm_ip, 5555)
+        nick = b"radio_probe".ljust(16, b"\x00")
+        chat = b"".ljust(48, b"\x00")
+        packet = struct.pack("!fffII16s48s", 0.0, 0.0, 0.0, 0, 0, nick, chat)
+        bye = struct.pack("!fffII16s48s", 0.0, 0.0, 0.0, 0xFFFFFFFF, 0, nick, chat)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.settimeout(1.2)
+            sock.sendto(packet, addr)
+            data, _ = sock.recvfrom(65535)
+
+            if data == b"\x00":
+                return 0
+            if len(data) % 88 == 0:
+                return len(data) // 88
+            if len(data) % 84 == 0:
+                return len(data) // 84
+            return None
+        except Exception:
+            return None
+        finally:
+            try:
+                sock.sendto(bye, addr)
+            except Exception:
+                pass
+            sock.close()
 
     def _block_arrow_keys(self, _event: tk.Event) -> str:
         return "break"
@@ -914,6 +1003,7 @@ class RadioApp:
         )
         if new_ip is not None:
             self._realm_ip = new_ip.strip()
+            self.realm_online_var.set("")
 
     def _launch_realm(self) -> None:
         self.root.update_idletasks()
@@ -1122,6 +1212,9 @@ def main() -> None:
         if app.stats_job is not None:
             root.after_cancel(app.stats_job)
             app.stats_job = None
+        if app._realm_online_job is not None:
+            root.after_cancel(app._realm_online_job)
+            app._realm_online_job = None
         if app.station_anim_job is not None:
             root.after_cancel(app.station_anim_job)
             app.station_anim_job = None
