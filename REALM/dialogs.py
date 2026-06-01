@@ -16,6 +16,7 @@ ICONO_PATH = str(Path(__file__).parent / "ICONO.ico")
 _AUTH_URL = f"http://{SERVER_IP}:5556"
 _CHAT_HISTORY: list[str] = []
 _CHAT_HISTORY_MAX = 50
+_LOCAL_USERS_DB = Path(__file__).parent / "users" / "local.json"
 
 
 # ── Cliente HTTP (solo remoto) ───────────────────────────────────────────────
@@ -51,8 +52,6 @@ def check_server_or_exit() -> None:
 
 
 def _auth_request(action: str, payload: dict) -> dict:
-    if _IS_LOCAL:
-        return {}
     try:
         body = json.dumps(payload).encode()
         req = urllib.request.Request(
@@ -98,6 +97,110 @@ def get_user_skin(username: str) -> int:
 
 def save_user_skin(username: str, skin: int) -> None:
     _auth_request("save_skin", {"user": username, "skin": skin})
+
+
+def _local_map_sanitize(stars, blackholes) -> dict:
+    out_stars = []
+    out_blackholes = []
+    if isinstance(stars, list):
+        for s in stars[:5000]:
+            if not isinstance(s, dict):
+                continue
+            try:
+                x = int(s.get("x"))
+                y = int(s.get("y"))
+                c = s.get("color", [255, 255, 255])
+                if not isinstance(c, (list, tuple)) or len(c) != 3:
+                    c = [255, 255, 255]
+                r = max(0, min(255, int(c[0])))
+                g = max(0, min(255, int(c[1])))
+                b = max(0, min(255, int(c[2])))
+            except Exception:
+                continue
+            out_stars.append({"x": x, "y": y, "color": [r, g, b]})
+    if isinstance(blackholes, list):
+        for b in blackholes[:5000]:
+            if not isinstance(b, dict):
+                continue
+            try:
+                x = int(b.get("x"))
+                y = int(b.get("y"))
+            except Exception:
+                continue
+            out_blackholes.append({"x": x, "y": y})
+    return {"stars": out_stars, "blackholes": out_blackholes}
+
+
+def _load_local_users_db() -> dict:
+    try:
+        if _LOCAL_USERS_DB.exists():
+            data = json.loads(_LOCAL_USERS_DB.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("users"), dict):
+                return data
+    except Exception:
+        pass
+    return {"schema": 1, "users": {}}
+
+
+def _save_local_users_db(data: dict) -> None:
+    _LOCAL_USERS_DB.parent.mkdir(parents=True, exist_ok=True)
+    _LOCAL_USERS_DB.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _get_local_user_map_markers(username: str) -> dict:
+    db = _load_local_users_db()
+    row = db.get("users", {}).get(str(username), {})
+    mm = row.get("map_markers", {}) if isinstance(row, dict) else {}
+    stars = mm.get("stars", []) if isinstance(mm, dict) else []
+    blackholes = mm.get("blackholes", []) if isinstance(mm, dict) else []
+    sanitized = _local_map_sanitize(stars, blackholes)
+    return {"stars": sanitized["stars"], "blackholes": sanitized["blackholes"]}
+
+
+def _save_local_user_map_markers(username: str, stars: list, blackholes: list) -> bool:
+    try:
+        db = _load_local_users_db()
+        users = db.setdefault("users", {})
+        uid = str(username)
+        row = users.get(uid)
+        if not isinstance(row, dict):
+            row = {"id": uid}
+            users[uid] = row
+        row["map_markers"] = _local_map_sanitize(stars, blackholes)
+        _save_local_users_db(db)
+        return True
+    except Exception:
+        return False
+
+
+def get_user_map_markers(username: str) -> dict:
+    resp = _auth_request("get_map", {"user": username})
+    if isinstance(resp.get("stars"), list) and isinstance(resp.get("blackholes"), list):
+        stars = resp.get("stars")
+        blackholes = resp.get("blackholes")
+    elif _IS_LOCAL:
+        return _get_local_user_map_markers(username)
+    else:
+        stars = []
+        blackholes = []
+    return {
+        "stars": stars,
+        "blackholes": blackholes,
+    }
+
+
+def save_user_map_markers(username: str, stars: list, blackholes: list) -> bool:
+    resp = _auth_request("save_map", {
+        "user": username,
+        "stars": stars,
+        "blackholes": blackholes,
+    })
+    ok = bool(resp.get("ok", False))
+    if ok:
+        return True
+    if _IS_LOCAL:
+        return _save_local_user_map_markers(username, stars, blackholes)
+    return False
 
 
 def open_bio_dialog(result_q: queue.Queue, done_event, current_bio: str) -> None:

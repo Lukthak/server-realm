@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "users": {
+    "luna": {
+      "id": "luna",
+      "salt": "172b7cd7abc9c5ba062476c695a7a360",
+      "hash": "3cc2e91b5420746b802db40fbb82af03391d16d2012aa8ccee4d0cbabd700f3c",
+      "pos_x": 501,
+      "pos_y": 902,
+      "bio": "",
+      "max_chunks": 0,
+      "skin": 0,
+      "inventory": {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+          "credits": 0
+        },
+        "version": 1,
+        "updated_at": 1780276612
+      }
+    },
+    "dante": {
+      "id": "dante",
+      "salt": "2b8a329fb6b6cb13492067ef01288cad",
+      "hash": "8e6ee5bf104546ac666a34ef1fbc07b017a405d2b5cb3e9e1b100dc39b3653f9",
+      "pos_x": -225.20550143899544,
+      "pos_y": -308.98563039734665,
+      "bio": "",
+      "max_chunks": 173,
+      "skin": 0,
+      "inventory": {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+          "credits": 0
+        },
+        "version": 1,
+        "updated_at": 1780276642
+      },
+      "map_markers": {
+        "stars": [
+          {
+            "x": -188912,
+            "y": -72454,
+            "color": [
+              145,
+              235,
+              255
+            ]
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "color": [
+              255,
+              168,
+              65
+            ]
+          }
+        ],
+        "blackholes": [
+          {
+            "x": -112371,
+            "y": -28612
+          },
+          {
+            "x": -59244,
+            "y": 900
+          },
+          {
+            "x": -172804,
+            "y": -62018
+          }
+        ]
+      }
+    },
+    "raulito": {
+      "id": "raulito",
+      "salt": "d1133de429039462347a493ec43500e8",
+      "hash": "c70725fee415391f73e8ffd8960bc38b2565b59e7977e352357b0926a7ade45f",
+      "pos_x": 11137.711179853839,
+      "pos_y": -24631.359069203165,
+      "bio": "",
+      "max_chunks": 4,
+      "skin": 1,
+      "inventory": {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+          "credits": 0
+        },
+        "version": 1,
+        "updated_at": 1780276870
+      }
+    },
+    "dant": {
+      "id": "dant",
+      "salt": "6a63d22dba5ad95d0023a6571f1e9073",
+      "hash": "44047e67c33f0d4dcfdd6219408e34762098fa88c8abfde4284bf123563ca72e",
+      "pos_x": -245.85223400124227,
+      "pos_y": 130.55390572335156,
+      "bio": "",
+      "max_chunks": 4,
+      "skin": 0,
+      "inventory": {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+          "credits": 0
+        },
+        "version": 1,
+        "updated_at": 1780277641
+      }
+    },
+    "da": {
+      "id": "da",
+      "salt": "419585d5ab2fe03ecf2289b6ab171c56",
+      "hash": "1962bfbcf8c5bc5a6bbda0d19d2fef22687b282b796ca032be831a24b5c84b24",
+      "pos_x": 0.6765925557368112,
+      "pos_y": 81.40150714842449,
+      "bio": "",
+      "max_chunks": 1,
+      "skin": 0,
+      "inventory": {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+          "credits": 0
+        },
+        "version": 1,
+        "updated_at": 1780277955
+      }
+    }
+  }
+}

@@ -8,35 +8,174 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from config import SERVER_PORT
+from config import SERVER_PORT, MAP_WIDTH, MAP_HEIGHT
 
 AUTH_PORT = 5556
 
-# ── Base de datos de usuarios ────────────────────────────────────────────────
-_DB_PATH = Path(__file__).parent / "users.json"
+# ── Base de datos local (todos los usuarios en local.json) ──────────────────
+_USERS_DIR = Path(__file__).parent / "users"
+_USERS_DB_PATH = _USERS_DIR / "local.json"
 _db_lock = threading.Lock()
 
 
+def _safe_user_id(user: str) -> str:
+    return str(user or "").strip()
+
+
+def _normalize_db(data: dict) -> dict:
+    users = {}
+    if isinstance(data, dict):
+        if isinstance(data.get("users"), dict):
+            users = dict(data["users"])
+        elif data.get("id"):
+            # Legacy: local.json guardaba un unico perfil.
+            users[str(data.get("id"))] = data
+    return {
+        "schema": 1,
+        "users": users,
+    }
+
+
 def _load_db() -> dict:
-    if _DB_PATH.exists():
+    _USERS_DIR.mkdir(parents=True, exist_ok=True)
+    db = {"schema": 1, "users": {}}
+
+    if _USERS_DB_PATH.exists():
         try:
-            return json.loads(_DB_PATH.read_text(encoding="utf-8"))
+            db = _normalize_db(json.loads(_USERS_DB_PATH.read_text(encoding="utf-8")))
         except Exception:
-            pass
-    return {}
+            db = {"schema": 1, "users": {}}
+
+    # Migracion suave desde archivos por usuario heredados (*.json, excepto local.json).
+    for p in _USERS_DIR.glob("*.json"):
+        if p.name.lower() == "local.json":
+            continue
+        try:
+            entry = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        uid = _safe_user_id(entry.get("id") or p.stem)
+        if not uid:
+            continue
+        db["users"].setdefault(uid, entry)
+
+    return db
 
 
 def _save_db(db: dict) -> None:
-    _DB_PATH.write_text(json.dumps(db, indent=2), encoding="utf-8")
+    _USERS_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "users": db.get("users", {}),
+    }
+    _USERS_DB_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_user(user: str) -> dict:
+    uid = _safe_user_id(user)
+    if not uid:
+        return {}
+    return dict(_load_db().get("users", {}).get(uid, {}))
+
+
+def _save_user(user: str, entry: dict) -> None:
+    uid = _safe_user_id(user)
+    if not uid:
+        return
+    db = _load_db()
+    row = dict(entry)
+    row["id"] = uid
+    db.setdefault("users", {})[uid] = row
+    _save_db(db)
+
+
+def _user_exists(user: str) -> bool:
+    uid = _safe_user_id(user)
+    if not uid:
+        return False
+    return uid in _load_db().get("users", {})
 
 
 def _hash_pw(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode()).hexdigest()
+
+
+def _default_inventory() -> dict:
+    return {
+        "schema": 1,
+        "capacity": 24,
+        "slots": [],
+        "currencies": {
+            "credits": 0,
+        },
+        "version": 1,
+        "updated_at": int(time.time()),
+    }
+
+
+def _new_user_record(user: str, password: str) -> dict:
+    salt = os.urandom(16).hex()
+    return {
+        "id": user,
+        "salt": salt,
+        "hash": _hash_pw(password, salt),
+        "pos_x": float(MAP_WIDTH // 2),
+        "pos_y": float(MAP_HEIGHT // 2),
+        "bio": "",
+        "max_chunks": 0,
+        "skin": 0,
+        "map_markers": {
+            "stars": [],
+            "blackholes": [],
+        },
+        "inventory": _default_inventory(),
+    }
+
+
+def _sanitize_map_markers(stars_raw, blackholes_raw) -> dict:
+    stars: list[dict] = []
+    blackholes: list[dict] = []
+
+    if isinstance(stars_raw, list):
+        for s in stars_raw[:5000]:
+            if not isinstance(s, dict):
+                continue
+            try:
+                x = int(s.get("x"))
+                y = int(s.get("y"))
+                c = s.get("color", [255, 255, 255])
+                if not isinstance(c, (list, tuple)) or len(c) != 3:
+                    c = [255, 255, 255]
+                r = max(0, min(255, int(c[0])))
+                g = max(0, min(255, int(c[1])))
+                b = max(0, min(255, int(c[2])))
+            except Exception:
+                continue
+            stars.append({"x": x, "y": y, "color": [r, g, b]})
+
+    if isinstance(blackholes_raw, list):
+        for b in blackholes_raw[:5000]:
+            if not isinstance(b, dict):
+                continue
+            try:
+                x = int(b.get("x"))
+                y = int(b.get("y"))
+            except Exception:
+                continue
+            blackholes.append({"x": x, "y": y})
+
+    return {
+        "stars": stars,
+        "blackholes": blackholes,
+    }
 
 
 class _AuthHandler(BaseHTTPRequestHandler):
@@ -49,78 +188,115 @@ class _AuthHandler(BaseHTTPRequestHandler):
             return
         path = self.path.strip("/")
 
-        with _db_lock:
-            db = _load_db()
+        try:
+            with _db_lock:
+                if path == "exists":
+                    self._respond({"exists": _user_exists(body["user"])})
 
-            if path == "exists":
-                self._respond({"exists": body["user"] in db})
+                elif path == "register":
+                    user = body["user"]
+                    if _user_exists(user):
+                        self._respond({"ok": False, "msg": "Usuario ya existe"})
+                    else:
+                        _save_user(user, _new_user_record(user, body["password"]))
+                        self._respond({"ok": True})
 
-            elif path == "register":
-                user = body["user"]
-                if user in db:
-                    self._respond({"ok": False, "msg": "Usuario ya existe"})
-                else:
-                    salt = os.urandom(16).hex()
-                    db[user] = {"salt": salt, "hash": _hash_pw(body["password"], salt)}
-                    _save_db(db)
+                elif path == "login":
+                    user = body["user"]
+                    entry = _load_user(user)
+                    if entry and _hash_pw(body["password"], entry["salt"]) == entry["hash"]:
+                        self._respond({"ok": True})
+                    else:
+                        self._respond({"ok": False})
+
+                elif path == "get_pos":
+                    entry = _load_user(body.get("user", ""))
+                    self._respond({
+                        "x": entry.get("pos_x"),
+                        "y": entry.get("pos_y"),
+                    })
+
+                elif path == "save_pos":
+                    user = body["user"]
+                    entry = _load_user(user)
+                    if not entry:
+                        # En modo local, permitir persistencia sin registro previo.
+                        entry = _new_user_record(user, "")
+                    entry["pos_x"] = body["x"]
+                    entry["pos_y"] = body["y"]
+                    _save_user(user, entry)
                     self._respond({"ok": True})
 
-            elif path == "login":
-                user = body["user"]
-                entry = db.get(user)
-                if entry and _hash_pw(body["password"], entry["salt"]) == entry["hash"]:
+                elif path == "get_bio":
+                    entry = _load_user(body.get("user", ""))
+                    self._respond({"bio": entry.get("bio", "")})
+
+                elif path == "save_bio":
+                    user = body.get("user", "")
+                    entry = _load_user(user)
+                    if not entry:
+                        # En modo local, permitir persistencia sin registro previo.
+                        entry = _new_user_record(user, "")
+                    entry["bio"] = str(body.get("bio", ""))[:200]
+                    _save_user(user, entry)
                     self._respond({"ok": True})
+
+                elif path == "get_dist":
+                    entry = _load_user(body.get("user", ""))
+                    self._respond({"dist": entry.get("max_chunks", 0)})
+
+                elif path == "save_dist":
+                    user = body.get("user", "")
+                    val = int(body.get("dist", 0))
+                    entry = _load_user(user)
+                    if not entry:
+                        # En modo local, permitir persistencia sin registro previo.
+                        entry = _new_user_record(user, "")
+                    if val > entry.get("max_chunks", 0):
+                        entry["max_chunks"] = val
+                        _save_user(user, entry)
+                    self._respond({"ok": True})
+
+                elif path == "get_skin":
+                    entry = _load_user(body.get("user", ""))
+                    self._respond({"skin": entry.get("skin", 0)})
+
+                elif path == "save_skin":
+                    user = body.get("user", "")
+                    entry = _load_user(user)
+                    if not entry:
+                        # En modo local, permitir persistencia sin registro previo.
+                        entry = _new_user_record(user, "")
+                    entry["skin"] = int(body.get("skin", 0))
+                    _save_user(user, entry)
+                    self._respond({"ok": True})
+
+                elif path == "get_map":
+                    entry = _load_user(body.get("user", ""))
+                    mm = entry.get("map_markers", {}) if isinstance(entry, dict) else {}
+                    stars = mm.get("stars", []) if isinstance(mm, dict) else []
+                    blackholes = mm.get("blackholes", []) if isinstance(mm, dict) else []
+                    self._respond({
+                        "stars": stars if isinstance(stars, list) else [],
+                        "blackholes": blackholes if isinstance(blackholes, list) else [],
+                    })
+
+                elif path == "save_map":
+                    user = body.get("user", "")
+                    entry = _load_user(user)
+                    if not entry:
+                        entry = _new_user_record(user, "")
+                    entry["map_markers"] = _sanitize_map_markers(
+                        body.get("stars", []),
+                        body.get("blackholes", []),
+                    )
+                    _save_user(user, entry)
+                    self._respond({"ok": True})
+
                 else:
-                    self._respond({"ok": False})
-
-            elif path == "get_pos":
-                entry = db.get(body["user"], {})
-                self._respond({
-                    "x": entry.get("pos_x"),
-                    "y": entry.get("pos_y"),
-                })
-
-            elif path == "save_pos":
-                user = body["user"]
-                if user in db:
-                    db[user]["pos_x"] = body["x"]
-                    db[user]["pos_y"] = body["y"]
-                    _save_db(db)
-                self._respond({"ok": True})
-
-            elif path == "get_bio":
-                entry = db.get(body.get("user", ""), {})
-                self._respond({"bio": entry.get("bio", "")})
-
-            elif path == "save_bio":
-                user = body.get("user", "")
-                if user in db:
-                    db[user]["bio"] = str(body.get("bio", ""))[:200]
-                    _save_db(db)
-                self._respond({"ok": True})
-
-            elif path == "get_dist":
-                entry = db.get(body.get("user", ""), {})
-                self._respond({"dist": entry.get("max_chunks", 0)})
-
-            elif path == "save_dist":
-                user = body.get("user", "")
-                val = int(body.get("dist", 0))
-                if user in db and val > db[user].get("max_chunks", 0):
-                    db[user]["max_chunks"] = val
-                    _save_db(db)
-                self._respond({"ok": True})
-
-            elif path == "get_skin":
-                entry = db.get(body.get("user", ""), {})
-                self._respond({"skin": entry.get("skin", 0)})
-
-            elif path == "save_skin":
-                user = body.get("user", "")
-                if user in db:
-                    db[user]["skin"] = int(body.get("skin", 0))
-                    _save_db(db)
-                self._respond({"ok": True})
+                    self._respond({"ok": False, "msg": f"unknown action: {path}"})
+        except Exception as ex:
+            self._respond({"ok": False, "msg": f"server error: {type(ex).__name__}"})
 
     def _respond(self, data: dict) -> None:
         b = json.dumps(data).encode()
@@ -158,6 +334,52 @@ def _cleanup(now):
     for a in stale:
         print(f"{clients[a]['nick']} se desconecto.")
         del clients[a]
+
+
+def _find_port_owner_pid(port: int, proto: str = "tcp") -> int | None:
+    """Best-effort lookup of the PID owning a local port on Windows."""
+    try:
+        out = subprocess.check_output(["netstat", "-ano"], text=True, errors="replace")
+    except Exception:
+        return None
+
+    needle = f":{int(port)}"
+    for line in out.splitlines():
+        row = line.strip()
+        if not row:
+            continue
+        up = row.upper()
+        if proto.lower() == "tcp":
+            if not up.startswith("TCP") or "LISTENING" not in up:
+                continue
+        else:
+            if not up.startswith("UDP"):
+                continue
+        if needle not in row:
+            continue
+        parts = row.split()
+        if not parts:
+            continue
+        try:
+            return int(parts[-1])
+        except Exception:
+            continue
+    return None
+
+
+def _pid_cmdline(pid: int) -> str:
+    try:
+        # WMIC no siempre esta disponible; PowerShell CIM suele estarlo.
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(Get-CimInstance Win32_Process -Filter \"ProcessId={int(pid)}\").CommandLine",
+        ]
+        out = subprocess.check_output(cmd, text=True, errors="replace").strip()
+        return out or "(sin command line disponible)"
+    except Exception:
+        return "(no se pudo obtener command line)"
 
 
 def _cmd_loop():
@@ -204,7 +426,19 @@ def _cmd_loop():
 def run(bind_ip="0.0.0.0"):
     global next_id
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((bind_ip, SERVER_PORT))
+    try:
+        sock.bind((bind_ip, SERVER_PORT))
+    except OSError as e:
+        if getattr(e, "winerror", None) == 10048:
+            pid = _find_port_owner_pid(SERVER_PORT, proto="udp")
+            if pid is not None:
+                print(f"[ERROR] Puerto UDP {SERVER_PORT} en uso por PID {pid}")
+                print(f"[ERROR] CMD: {_pid_cmdline(pid)}")
+            else:
+                print(f"[ERROR] Puerto UDP {SERVER_PORT} en uso por otro proceso")
+            print("[TIP] Cerrá la otra instancia del server o liberá el puerto antes de iniciar.")
+            return
+        raise
     sock.settimeout(0.5)
     threading.Thread(
         target=lambda: HTTPServer(("0.0.0.0", AUTH_PORT), _AuthHandler).serve_forever(),

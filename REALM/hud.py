@@ -5,6 +5,7 @@ import time
 
 import pygame
 from PIL import Image
+from background import BG_COLOR
 
 _SPRITES_DIR = os.path.join(os.path.dirname(__file__), "sprites")
 _pen_sprite: pygame.Surface | None = None
@@ -50,12 +51,70 @@ def draw_debug(surface, universe, cam_x, cam_y, font, chunk_coord, ping_ms: floa
     surface.blit(ping_surf, (6, 6 + hud.get_height() + 2))
 
 
-def draw_minimap(surface, player_x, player_y, others, minimap_range) -> None:
+def draw_minimap(surface, player_x, player_y, others, minimap_range,
+                 map_stars=None, map_blackholes=None,
+                 show_chunk_grid: bool = False,
+                 chunk_w: float = 1.0,
+                 chunk_h: float = 1.0) -> None:
     surface.fill((0, 0, 0))
     w, h = surface.get_size()
     cx, cy = w // 2, h // 2
     scale_x = w / (2 * minimap_range)
     scale_y = h / (2 * minimap_range)
+
+    if show_chunk_grid and chunk_w > 0 and chunk_h > 0:
+        x0 = player_x - minimap_range
+        x1 = player_x + minimap_range
+        y0 = player_y - minimap_range
+        y1 = player_y + minimap_range
+
+        first_vx = math.floor(x0 / chunk_w) * chunk_w
+        vx = first_vx
+        while vx <= x1:
+            px = int(cx + (vx - player_x) * scale_x)
+            if 0 <= px < w:
+                pygame.draw.line(surface, BG_COLOR, (px, 0), (px, h - 1), 1)
+            vx += chunk_w
+
+        first_hy = math.floor(y0 / chunk_h) * chunk_h
+        hy = first_hy
+        while hy <= y1:
+            py = int(cy + (hy - player_y) * scale_y)
+            if 0 <= py < h:
+                pygame.draw.line(surface, BG_COLOR, (0, py), (w - 1, py), 1)
+            hy += chunk_h
+
+    if map_stars:
+        for s in map_stars:
+            try:
+                sxw = float(s.get("x", 0))
+                syw = float(s.get("y", 0))
+                c = s.get("color", [255, 255, 255])
+                color = (
+                    max(0, min(255, int(c[0]))),
+                    max(0, min(255, int(c[1]))),
+                    max(0, min(255, int(c[2]))),
+                )
+            except Exception:
+                continue
+            px = int(cx + (sxw - player_x) * scale_x)
+            py = int(cy + (syw - player_y) * scale_y)
+            if 0 <= px < w and 0 <= py < h:
+                surface.set_at((px, py), color)
+
+    if map_blackholes:
+        violet = (170, 70, 255)
+        for b in map_blackholes:
+            try:
+                bxw = float(b.get("x", 0))
+                byw = float(b.get("y", 0))
+            except Exception:
+                continue
+            px = int(cx + (bxw - player_x) * scale_x)
+            py = int(cy + (byw - player_y) * scale_y)
+            if 0 <= px < w and 0 <= py < h:
+                surface.set_at((px, py), violet)
+
     for _pid, (rx, ry, _rangle, _rskin, _rchunks, _rnick, _rchat) in others.items():
         px = int(cx + (rx - player_x) * scale_x)
         py = int(cy + (ry - player_y) * scale_y)

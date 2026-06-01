@@ -29,17 +29,19 @@ class BrightStar:
     pulse_speed: float
     pulse_offset: float
     planets: list["Planet"]
+    solar_system: bool = False
 
 
 @dataclass
 class Planet:
     orbit_radius: float
     orbit_speed: float
-    radius: int
+    radius: float
     color: tuple[int, int, int]
     angle: float
     vertical_tilt: float
     depth_strength: float
+    orbit_rotation: float
     moons: list["Moon"]
 
 
@@ -53,10 +55,11 @@ class Moon:
 
 
 BRIGHT_STAR_TYPES: list[tuple[str, tuple[int, int, int], tuple[int, int]]] = [
-    ("azul", (95, 155, 255), (7, 11)),
-    ("roja", (255, 88, 88), (4, 7)),
-    ("naranja", (255, 168, 65), (5, 8)),
-    ("celeste", (145, 235, 255), (6, 10)),
+    ("azul", (95, 155, 255), (7, 14)),
+    ("roja", (255, 88, 88), (4, 9)),
+    ("naranja", (255, 168, 65), (5, 11)),
+    ("celeste", (145, 235, 255), (6, 13)),
+    ("blanca", (240, 245, 255), (8, 16)),
 ]
 
 
@@ -77,8 +80,22 @@ def _clamp(v: int, lo: int, hi: int) -> int:
 
 
 def _create_bright_star(rng: random.Random, x: int, y: int) -> BrightStar:
-    kind, color, size_range = rng.choice(BRIGHT_STAR_TYPES)
-    radius = rng.randint(size_range[0], size_range[1])
+    # Regla especial: 1 de cada 4 estrellas es celeste y el doble de grande.
+    giant_celeste = rng.random() < 0.25
+    if giant_celeste:
+        kind = "celeste"
+        color = (145, 235, 255)
+        size_range = (6, 13)
+    else:
+        kind, color, size_range = rng.choice(BRIGHT_STAR_TYPES)
+
+    base_radius = rng.randint(size_range[0], size_range[1])
+    # Variacion extra para que haya estrellas notablemente mas chicas o mas grandes.
+    radius = int(base_radius * rng.uniform(0.85, 1.35))
+    if giant_celeste:
+        radius *= 2
+    radius_cap = 30 if giant_celeste else 18
+    radius = max(4, min(radius_cap, radius))
     return BrightStar(
         kind=kind,
         x=x,
@@ -87,53 +104,81 @@ def _create_bright_star(rng: random.Random, x: int, y: int) -> BrightStar:
         color=color,
         pulse_speed=rng.uniform(1.2, 3.2),
         pulse_offset=rng.uniform(0.0, math.tau),
-        planets=_create_planets(rng, kind, radius),
+        planets=_create_planets(rng, kind, radius, giant_celeste=giant_celeste),
     )
 
 
-def _create_moons(rng: random.Random, planet_radius: int) -> list[Moon]:
-    if planet_radius <= 2:
+def _create_moons(rng: random.Random, planet_radius: float) -> list[Moon]:
+    pr = float(planet_radius)
+    if pr <= 2.2:
         moon_count = 0
-    elif planet_radius == 3:
+    elif pr <= 3.2:
         moon_count = rng.randint(0, 1)
-    elif planet_radius == 4:
+    elif pr <= 4.2:
         moon_count = rng.randint(1, 2)
-    elif planet_radius == 5:
+    elif pr <= 5.2:
         moon_count = rng.randint(2, 3)
-    elif planet_radius == 6:
+    elif pr <= 6.2:
         moon_count = rng.randint(3, 5)
     else:
         moon_count = rng.randint(5, 8)
 
     moons: list[Moon] = []
     for index in range(moon_count):
-        orbit_radius = planet_radius * 2.2 + index * rng.uniform(1.8, 3.0)
-        orbit_speed = rng.uniform(1.0, 2.8) / max(1.0, orbit_radius / planet_radius)
+        orbit_radius = pr * 2.2 + index * rng.uniform(1.8, 3.0)
+        orbit_speed = rng.uniform(1.0, 2.8) / max(1.0, orbit_radius / max(1.0, pr))
         moons.append(
             Moon(
                 orbit_radius=orbit_radius,
                 orbit_speed=orbit_speed,
                 radius=1,
                 color=(220, 220, 220),
-                angle=rng.uniform(0.0, math.tau),
+                angle=random.uniform(0.0, math.tau),
             )
         )
     return moons
 
 
-def _create_planets(rng: random.Random, kind: str, star_radius: int) -> list[Planet]:
+def _create_planets(rng: random.Random, kind: str, star_radius: int,
+                    giant_celeste: bool = False) -> list[Planet]:
+    star_scale = max(0.70, min(2.40, star_radius / 8.0))
     if kind == "azul":
-        planet_count = rng.randint(3, 5)
-        orbit_base = star_radius * 4.5
+        planet_count = rng.randint(3, 6)
+        orbit_base = star_radius * 5.4 * star_scale
     elif kind == "celeste":
-        planet_count = rng.randint(2, 4)
-        orbit_base = star_radius * 4.0
+        planet_count = rng.randint(2, 5)
+        orbit_base = star_radius * 5.0 * star_scale
+    elif kind == "blanca":
+        planet_count = rng.randint(4, 7)
+        orbit_base = star_radius * 6.0 * star_scale
     elif kind == "naranja":
-        planet_count = rng.randint(1, 3)
-        orbit_base = star_radius * 3.5
+        planet_count = rng.randint(1, 5)
+        orbit_base = star_radius * 4.6 * star_scale
     else:
-        planet_count = rng.randint(0, 2)
-        orbit_base = star_radius * 3.0
+        planet_count = rng.randint(0, 4)
+        orbit_base = star_radius * 4.0 * star_scale
+
+    # Estrellas grandes: mayor espacio orbital percibido (se ven mas cerca/grandes).
+    if star_radius >= 12:
+        orbit_base *= 1.28
+        planet_count = min(8, planet_count + rng.randint(0, 2))
+    elif star_radius <= 6:
+        planet_count = max(0, planet_count - rng.randint(0, 1))
+
+    # Celeste gigante: planetas del mismo tamaño y mucho mas alejados.
+    uniform_planet_radius = None
+    if giant_celeste and planet_count > 0:
+        orbit_base *= 1.85
+        planet_count = min(9, max(3, planet_count + rng.randint(1, 3)))
+        uniform_planet_radius = rng.uniform(2.4, 5.8)
+
+    # Regla global: a mayor cantidad de planetas, mayor separacion orbital.
+    count_space_scale = 1.0 + max(0, planet_count - 1) * 0.14
+    orbit_base *= (1.0 + max(0, planet_count - 1) * 0.07)
+
+    # Soles generados no-hub: órbitas más lejanas entre sí.
+    if not giant_celeste:
+        orbit_base *= 1.22
 
     palette = [
         (170, 170, 190),
@@ -144,27 +189,115 @@ def _create_planets(rng: random.Random, kind: str, star_radius: int) -> list[Pla
     ]
 
     planets: list[Planet] = []
+    orbit_cursor = orbit_base + rng.uniform(0.0, star_radius * (0.45 + 0.25 * star_scale))
+    gap_min = star_radius * (1.9 + 0.85 * star_scale)
+    gap_max = star_radius * (3.2 + 1.20 * star_scale)
+    gap_min *= count_space_scale
+    gap_max *= count_space_scale
+    if not giant_celeste:
+        gap_min *= 1.35
+        gap_max *= 1.70
+    if giant_celeste:
+        gap_min *= 2.0
+        gap_max *= 2.8
     for index in range(planet_count):
-        orbit_radius = orbit_base + index * rng.uniform(star_radius * 1.5, star_radius * 2.2)
+        if index > 0:
+            orbit_cursor += rng.uniform(gap_min, gap_max)
+            # Salto extra ocasional para sistemas menos uniformes.
+            if rng.random() < 0.22:
+                orbit_cursor += rng.uniform(star_radius * 0.8, star_radius * 2.2)
+
+        orbit_radius = orbit_cursor
         orbit_speed = rng.uniform(0.35, 1.15) / max(1.0, orbit_radius / star_radius)
-        planet_radius = rng.randint(2, 4 if kind in {"azul", "celeste"} else 3)
+
+        if kind in {"azul", "celeste", "blanca"}:
+            max_pr = 6 if star_radius >= 12 else 5
+        elif kind == "naranja":
+            max_pr = 5 if star_radius >= 10 else 4
+        else:
+            max_pr = 4
+
+        if uniform_planet_radius is not None:
+            planet_radius = uniform_planet_radius
+        else:
+            min_pr = 1 if rng.random() < 0.18 else 2
+            planet_radius = rng.uniform(float(min_pr), float(max_pr))
         planets.append(
             Planet(
                 orbit_radius=orbit_radius,
                 orbit_speed=orbit_speed,
                 radius=planet_radius,
                 color=rng.choice(palette),
-                angle=rng.uniform(0.0, math.tau),
-                vertical_tilt=rng.uniform(0.25, 0.55),
-                depth_strength=rng.uniform(0.35, 0.75),
+                angle=random.uniform(0.0, math.tau),
+                vertical_tilt=rng.uniform(0.18, 0.62),
+                depth_strength=rng.uniform(0.30, 0.90),
+                orbit_rotation=rng.uniform(0.0, math.tau),
                 moons=_create_moons(rng, planet_radius),
             )
         )
     return planets
 
 
+def _create_solar_system_planets(rng: random.Random, star_radius: int,
+                                 hub_mode: bool = False) -> list[Planet]:
+    # Sistema tipo Solar: 8 planetas con radios orbitales crecientes.
+    specs = [
+        ((170, 160, 145), 2, 0),  # Mercurio
+        ((220, 190, 120), 2, 0),  # Venus
+        ((120, 165, 220), 3, 1),  # Tierra
+        ((205, 120, 90), 2, 0),   # Marte
+        ((210, 175, 120), 4, 4),  # Jupiter
+        ((205, 185, 145), 4, 5),  # Saturno
+        ((125, 205, 220), 3, 2),  # Urano
+        ((95, 130, 220), 3, 2),   # Neptuno
+    ]
+
+    planets: list[Planet] = []
+    spacing_scale = max(0.85, min(2.30, 1.0 + (star_radius - 8) * 0.09))
+    n_planets = len(specs)
+    count_space_scale = 1.0 + max(0, n_planets - 1) * 0.14
+    if hub_mode:
+        count_space_scale *= 1.55
+
+    orbit_base = star_radius * 5.2 * spacing_scale * count_space_scale
+    for index, (color, radius, moon_count) in enumerate(specs):
+        orbit_step = star_radius * (2.8 + 0.35 * spacing_scale) * count_space_scale
+        orbit_radius = orbit_base + index * orbit_step + rng.uniform(0.0, star_radius * (0.4 + 0.25 * spacing_scale))
+        orbit_speed = (1.05 / (1.0 + index * 0.42)) / max(1.0, orbit_radius / star_radius)
+        planet_radius = max(1.0, float(radius) + rng.uniform(-0.35, 0.45))
+
+        moons: list[Moon] = []
+        for mi in range(moon_count):
+            moon_orbit = planet_radius * 2.3 + mi * rng.uniform(1.6, 2.6)
+            moon_speed = rng.uniform(1.0, 2.4) / max(1.0, moon_orbit / max(1.0, planet_radius))
+            moons.append(
+                Moon(
+                    orbit_radius=moon_orbit,
+                    orbit_speed=moon_speed,
+                    radius=1,
+                    color=(220, 220, 220),
+                    angle=random.uniform(0.0, math.tau),
+                )
+            )
+
+        planets.append(
+            Planet(
+                orbit_radius=orbit_radius,
+                orbit_speed=orbit_speed,
+                radius=planet_radius,
+                color=color,
+                angle=random.uniform(0.0, math.tau),
+                vertical_tilt=rng.uniform(0.24, 0.42),
+                depth_strength=rng.uniform(0.45, 0.8),
+                orbit_rotation=rng.uniform(0.0, math.tau),
+                moons=moons,
+            )
+        )
+    return planets
+
+
 def _draw_bright_planets(surface: pygame.Surface, star: BrightStar, t: float,
-                         cx: int, cy: int, white_shift: float,
+                         cx: int, cy: int, star_radius: int, white_shift: float,
                          front_only: bool | None = None) -> None:
     for planet in star.planets:
         angle = planet.angle + t * planet.orbit_speed
@@ -176,12 +309,23 @@ def _draw_bright_planets(surface: pygame.Surface, star: BrightStar, t: float,
         if front_only is False and is_front:
             continue
 
-        px = int(cx + math.cos(angle) * planet.orbit_radius)
-        py = int(cy + math.sin(angle) * planet.orbit_radius * planet.vertical_tilt)
+        ex = math.cos(angle) * planet.orbit_radius
+        ey = math.sin(angle) * planet.orbit_radius * planet.vertical_tilt
+        rot = planet.orbit_rotation
+        cr = math.cos(rot)
+        sr = math.sin(rot)
+        px = int(cx + ex * cr - ey * sr)
+        py = int(cy + ex * sr + ey * cr)
         depth_scale = 0.52 + ((depth + 1.0) * 0.5) * planet.depth_strength
         scaled_radius = max(1, int(planet.radius * depth_scale))
 
         pcolor = _towards_white(planet.color, white_shift)
+        if is_front:
+            dx = px - cx
+            dy = py - cy
+            overlap_r = star_radius + max(1, int(scaled_radius * 0.65))
+            if (dx * dx + dy * dy) <= (overlap_r * overlap_r):
+                pcolor = (10, 10, 12)
         pygame.draw.circle(surface, pcolor, (px, py), scaled_radius)
 
         for moon in planet.moons:
@@ -361,6 +505,7 @@ class BlackHole:
 
     def __init__(self, world_x, world_y, seed):
         rng   = random.Random(seed)
+        self.seed = int(seed)
         self.wx = world_x
         self.wy = world_y
 
@@ -488,6 +633,22 @@ class BlackHole:
         self._spike_angle     = math.degrees(base_angle)
         self._spike_rot_speed = abs(self._rot_speed) * 0.35 * rng.choice([-1, 1])
 
+        # Metadatos para inspeccion/debug (admin command "ver").
+        self.meta = {
+            "arms": int(n_arms),
+            "turns": float(turns),
+            "spread": float(spread),
+            "tilt": float(tilt),
+            "scale": float(scale),
+            "theme_inner": (int(ir), int(ig), int(ib)),
+            "theme_arm": (int(ar), int(ag), int(ab)),
+            "radius": float(radius),
+            "star_count": int(len(self._stars)),
+            "rot_speed": float(self._rot_speed),
+            "spike_rot_speed": float(self._spike_rot_speed),
+            "parallax": float(self.PARALLAX),
+        }
+
     def draw(self, surface, cam_x, cam_y, sat_boost: float = 0.0) -> None:
         self._angle = (self._angle + self._rot_speed) % 360
         a   = math.radians(self._angle)
@@ -578,7 +739,13 @@ class Background:
 
         # Prueba forzada: una estrella gigante en (0, 0) del chunk (0,0).
         if seed == 0:
-            bright_stars.append(_create_bright_star(rng, 0, 0))
+            forced_star = _create_bright_star(rng, 0, 0)
+            forced_star.kind = "naranja"
+            forced_star.color = (255, 168, 65)
+            forced_star.radius = max(8, int(forced_star.radius * 2.0))
+            forced_star.planets = _create_solar_system_planets(rng, forced_star.radius, hub_mode=True)
+            forced_star.solar_system = True
+            bright_stars.append(forced_star)
         elif rng.random() < BRIGHT_STAR_CHANCE:
             bx = rng.randint(0, map_w - 1)
             by = rng.randint(0, map_h - 1)
@@ -661,7 +828,7 @@ class Background:
         star_color = _towards_white(star.color, white_shift)
 
         # Planetas traseros primero para que la estrella los oculte parcialmente.
-        _draw_bright_planets(surface, star, t, cx, cy, white_shift, front_only=False)
+        _draw_bright_planets(surface, star, t, cx, cy, star.radius, white_shift, front_only=False)
 
         pygame.draw.circle(glow_surface, (*star_color, outer_alpha), (cx, cy), outer_r)
         pygame.draw.circle(glow_surface, (*star_color, mid_alpha), (cx, cy), mid_r)
@@ -678,7 +845,7 @@ class Background:
         surface.blit(shimmer, (cx - scx, cy - scy))
 
         # Planetas delanteros después del shimmer para sensación de profundidad.
-        _draw_bright_planets(surface, star, t, cx, cy, white_shift, front_only=True)
+        _draw_bright_planets(surface, star, t, cx, cy, star.radius, white_shift, front_only=True)
 
     def _update_shooting_stars(self):
         for ss in self.shooting_stars:
@@ -723,6 +890,10 @@ class Background:
             rx = int((wx - cam_cx) * BRIGHT_STAR_PARALLAX + self.screen_w / 2)
             ry = int((wy - cam_cy) * BRIGHT_STAR_PARALLAX + self.screen_h / 2)
             pad = int(star.radius * 4)
+            if star.planets:
+                max_orbit = max(float(p.orbit_radius) for p in star.planets)
+                one_chunk_extra = max(self.map_w, self.map_h) * BRIGHT_STAR_PARALLAX
+                pad = int(max(pad, max_orbit + one_chunk_extra))
             if -pad <= rx <= self.screen_w + pad and -pad <= ry <= self.screen_h + pad:
                 self._draw_bright_star(
                     surface, star, bright_t, rx, ry, bg_color, white_shift,
