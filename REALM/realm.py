@@ -196,6 +196,8 @@ def main():
     _map_markers_dirty = False
     _map_last_save_t = 0.0
     _MAP_SAVE_INTERVAL = 2.0
+    _map_save_in_flight = False
+    _map_save_lock = threading.Lock()
 
     def _marker_key(x: int, y: int) -> str:
         return f"{int(x)}:{int(y)}"
@@ -236,21 +238,45 @@ def main():
             continue
         _discovered_blackholes[_marker_key(b["x"], b["y"])] = b
 
-    def _flush_map_markers(force: bool = False) -> None:
-        nonlocal _map_markers_dirty, _map_last_save_t
+    def _flush_map_markers(force: bool = False, immediate: bool = False) -> None:
+        nonlocal _map_markers_dirty, _map_last_save_t, _map_save_in_flight
         if not _map_markers_dirty:
             return
+
+        stars_payload = list(_discovered_stars.values())
+        blackholes_payload = list(_discovered_blackholes.values())
         now = time.time()
-        if not force and (now - _map_last_save_t) < _MAP_SAVE_INTERVAL:
+
+        if force:
+            saved_ok = save_user_map_markers(nickname, stars_payload, blackholes_payload)
+            if saved_ok:
+                _map_markers_dirty = False
+                _map_last_save_t = now
             return
-        saved_ok = save_user_map_markers(
-            nickname,
-            list(_discovered_stars.values()),
-            list(_discovered_blackholes.values()),
-        )
-        if saved_ok:
-            _map_markers_dirty = False
+
+        if (not immediate) and (now - _map_last_save_t) < _MAP_SAVE_INTERVAL:
+            return
+
+        with _map_save_lock:
+            if _map_save_in_flight:
+                return
+            _map_save_in_flight = True
             _map_last_save_t = now
+
+        def _save_async(stars_snapshot: list, blackholes_snapshot: list) -> None:
+            nonlocal _map_markers_dirty, _map_save_in_flight, _map_last_save_t
+            saved_ok = save_user_map_markers(nickname, stars_snapshot, blackholes_snapshot)
+            with _map_save_lock:
+                _map_save_in_flight = False
+                if saved_ok:
+                    # Solo limpiar dirty si no hubo nuevos descubrimientos desde el snapshot.
+                    if len(stars_snapshot) >= len(_discovered_stars) and len(blackholes_snapshot) >= len(_discovered_blackholes):
+                        _map_markers_dirty = False
+                else:
+                    # Permite reintento rapido en proximo frame.
+                    _map_last_save_t = 0.0
+
+        threading.Thread(target=_save_async, args=(stars_payload, blackholes_payload), daemon=True).start()
 
     def _shutdown_and_exit():
         _flush_map_markers(force=True)
@@ -797,7 +823,7 @@ def main():
                 _map_markers_dirty = True
                 discovered_now = True
         if discovered_now:
-            _flush_map_markers(force=True)
+            _flush_map_markers(immediate=True)
         else:
             _flush_map_markers()
 
@@ -833,7 +859,15 @@ def main():
         else:
             universe.draw(render_surface, cam_x, cam_y)
             sun_tint_color, sun_tint_amount, player_brightness = universe.get_player_light()
-            draw_players(render_surface, net.get_others(), cam_x, cam_y, nick_font, ghost_sprites)
+            draw_players(
+                render_surface,
+                net.get_others(),
+                cam_x,
+                cam_y,
+                nick_font,
+                ghost_sprites,
+                light_provider=universe.get_light_at,
+            )
             draw_local_player(render_surface, player, nickname, cam_x, cam_y, nick_font,
                               chat_typing, current_chat,
                               tint_color=sun_tint_color, tint_amount=sun_tint_amount,

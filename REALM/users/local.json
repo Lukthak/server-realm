@@ -25,10 +25,10 @@
       "id": "dante",
       "salt": "2b8a329fb6b6cb13492067ef01288cad",
       "hash": "8e6ee5bf104546ac666a34ef1fbc07b017a405d2b5cb3e9e1b100dc39b3653f9",
-      "pos_x": -225.20550143899544,
-      "pos_y": -308.98563039734665,
+      "pos_x": -259.20550143899544,
+      "pos_y": -358.98563039734665,
       "bio": "",
-      "max_chunks": 173,
+      "max_chunks": 174,
       "skin": 0,
       "inventory": {
         "schema": 1,

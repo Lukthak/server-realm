@@ -219,6 +219,40 @@ class Universe:
         brightness = min(1.35, brightness + self._sun_glow * 0.35)
         return tint_color, tint_amount, brightness
 
+    def get_light_at(self, world_x: float, world_y: float):
+        """Devuelve (tint_color, tint_amount, brightness) para una posicion mundial."""
+        BH_DARK_RADIUS = 1200.0
+        SUN_LIGHT_RADIUS = 1800.0
+
+        min_bh_dist = float("inf")
+        for bh in self._all_blackholes():
+            d = math.hypot(float(bh.wx) - world_x, float(bh.wy) - world_y)
+            if d < min_bh_dist:
+                min_bh_dist = d
+        bh_darkness = 1.0 - (min_bh_dist / BH_DARK_RADIUS) if min_bh_dist < BH_DARK_RADIUS else 0.0
+
+        min_sun_dist = float("inf")
+        near_sun_color = (0, 0, 0)
+        for chunk in self.chunks.values():
+            wx0 = chunk.world_x
+            wy0 = chunk.world_y
+            for star in chunk.bg.bright_stars:
+                sx = wx0 + star.x
+                sy = wy0 + star.y
+                d = math.hypot(float(sx) - world_x, float(sy) - world_y)
+                if d < min_sun_dist:
+                    min_sun_dist = d
+                    near_sun_color = star.color
+        sun_glow = 1.0 - (min_sun_dist / SUN_LIGHT_RADIUS) if min_sun_dist < SUN_LIGHT_RADIUS else 0.0
+
+        tint_amount = min(0.72, sun_glow * 0.85)
+        sun_white = min(0.55, sun_glow * 0.65)
+        tint_color = _towards_white(near_sun_color, sun_white)
+        tint_amount = min(0.90, tint_amount + sun_glow * 0.25)
+        brightness = max(0.22, 1.0 - bh_darkness * 0.78)
+        brightness = min(1.35, brightness + sun_glow * 0.35)
+        return tint_color, tint_amount, brightness
+
     def _needed(self, cx, cy):
         base = {(cx + dx, cy + dy) for dx, dy in _OFFSETS}
         # los chunks con black hole cargan sus 8 vecinos también

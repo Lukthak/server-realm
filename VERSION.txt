@@ -1,0 +1,14 @@
+RealmHeaven Versioning
+
+1) 0.9.0-alpha.1
+   Date: 2026-05-31
+   Stage: Internal alpha baseline
+
+2) 1.0.0-alpha.1
+   Date: 2026-05-31
+   Stage: First public alpha
+   Notes:
+   - Remote/local map marker persistence improvements
+   - Administrator input and cursor behavior fixes
+   - Minimap grid and chunk interaction updates
+   - Lighting parity for local and remote players

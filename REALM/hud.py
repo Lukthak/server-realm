@@ -252,7 +252,8 @@ def load_icon(icono_path: str):
         return None
 
 
-def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites) -> None:
+def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites,
+                 light_provider=None) -> None:
     """Dibuja todos los jugadores remotos con sus burbujas/nick."""
     for _pid, (rx, ry, rangle, rskin, _rchunks, rnick, rchat) in others.items():
         rnick = str(rnick).replace("\x00", "")
@@ -289,7 +290,36 @@ def draw_players(surface, others, cam_x, cam_y, nick_font, ghost_sprites) -> Non
             draw_typing_dots(surface, rcx, top_base)
         elif rchat:
             draw_chat_bubble(surface, nick_font, rchat, rcx, top_base)
-        surface.blit(spr, (sx, sy))
+
+        tint_color = None
+        tint_amount = 0.0
+        brightness = 1.0
+        if light_provider is not None:
+            try:
+                tint_color, tint_amount, brightness = light_provider(cx_world, cy_world)
+            except Exception:
+                tint_color, tint_amount, brightness = None, 0.0, 1.0
+
+        out = spr
+        need_copy = (tint_color and tint_amount > 0.0) or brightness < 0.999
+        if need_copy:
+            out = spr.copy()
+
+        if tint_color and tint_amount > 0.0:
+            tr, tg, tb = tint_color
+            amt = max(0.0, min(1.0, float(tint_amount)))
+            overlay = pygame.Surface(out.get_size(), pygame.SRCALPHA)
+            overlay.fill((int(tr * amt), int(tg * amt), int(tb * amt), 0))
+            out.blit(overlay, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
+        if brightness < 0.999:
+            b = max(0.0, min(1.0, float(brightness)))
+            mult = pygame.Surface(out.get_size(), pygame.SRCALPHA)
+            m = int(255 * b)
+            mult.fill((m, m, m, 255))
+            out.blit(mult, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+        surface.blit(out, (sx, sy))
         if rnick:
             label = nick_font.render(rnick, True, (200, 200, 255))
             surface.blit(label, (rcx - label.get_width() // 2, bottom_base + 2))
