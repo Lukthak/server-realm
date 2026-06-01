@@ -321,6 +321,9 @@ PACKET_PLAYER_LEG = 84   # uint32 id + float x + float y + uint32 skin + uint32 
 PACKET_PLAYER_EXT = 88   # uint32 id + float x + float y + float angle + uint32 skin + uint32 chunks + 16s nick + 48s chat
 FORCE_EXT_PROTOCOL = False
 _PROBE_NICK_PREFIX = "radio_probe"
+ENABLE_IDLE_SELF_PING = True
+IDLE_SELF_PING_INTERVAL = 60.0
+IDLE_SELF_PING_TIMEOUT = 2.0
 
 clients = {}
 next_id = 1
@@ -429,6 +432,28 @@ def _cmd_loop():
             print(f"Comando desconocido. Escribi HELP para ver los comandos.")
 
 
+def _build_probe_packet(tag: str = "idle") -> bytes:
+    nick = f"{_PROBE_NICK_PREFIX}_{tag}".encode("utf-8")[:16].ljust(16, b'\x00')
+    return struct.pack("!ffII16s48s", 0.0, 0.0, 0, 0, nick, b'\x00' * 48)
+
+
+def _idle_self_ping_loop(bind_ip: str) -> None:
+    target_ip = "127.0.0.1" if bind_ip == "0.0.0.0" else bind_ip
+    packet = _build_probe_packet()
+    while running:
+        time.sleep(IDLE_SELF_PING_INTERVAL)
+        if not running:
+            return
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe_sock:
+                probe_sock.settimeout(IDLE_SELF_PING_TIMEOUT)
+                probe_sock.sendto(packet, (target_ip, SERVER_PORT))
+                probe_sock.recvfrom(1024)
+        except Exception:
+            if running:
+                print(f"[WARN] Self-ping idle sin respuesta en {target_ip}:{SERVER_PORT}")
+
+
 def run(bind_ip="0.0.0.0"):
     global next_id
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -450,6 +475,8 @@ def run(bind_ip="0.0.0.0"):
         target=lambda: HTTPServer(("0.0.0.0", AUTH_PORT), _AuthHandler).serve_forever(),
         daemon=True,
     ).start()
+    if ENABLE_IDLE_SELF_PING:
+        threading.Thread(target=_idle_self_ping_loop, args=(bind_ip,), daemon=True).start()
     print(f"Servidor escuchando en {bind_ip}:{SERVER_PORT} — HELP para ver comandos")
 
     threading.Thread(target=_cmd_loop, daemon=True).start()

@@ -144,7 +144,7 @@ class RadioApp:
     def __init__(self, root: tk.Tk, ffplay_path: "Path | None" = None) -> None:
         self.root = root
         self.root.title("Radio Heaven")
-        self.root.geometry("350x350")
+        self.root.geometry("350x390")
         self.root.resizable(False, False)
         self.root.configure(bg="#6f1d1b")
         self._icon_image: tk.PhotoImage | None = None
@@ -195,6 +195,9 @@ class RadioApp:
         self.realm_online_var = tk.StringVar(value="")
         self._realm_online_inflight = False
         self._realm_online_job: str | None = None
+        self._realm_default_fg = "#f7e7a9"
+        self._realm_hover_fg = "#ff3b3b"
+        self.realm_label: tk.Label | None = None
 
         self._build_ui()
 
@@ -309,7 +312,7 @@ class RadioApp:
         self.station_title_label.pack(side="right", anchor="e", padx=(8, 0))
 
         list_frame = tk.Frame(main, bg="#6f1d1b", bd=2, relief="solid")
-        list_frame.pack(fill="both", expand=True, pady=(6, 10))
+        list_frame.pack(fill="both", expand=True, pady=(6, 6))
 
         self.listbox = tk.Listbox(
             list_frame,
@@ -333,7 +336,7 @@ class RadioApp:
             self.listbox.insert("end", name)
 
         controls = tk.Frame(main, bg="#6f1d1b")
-        controls.pack(pady=(0, 10))
+        controls.pack(pady=(0, 6))
 
         self.play_pause_btn = ttk.Button(controls, text="▶", width=3, command=self.toggle_play_pause)
         self.play_pause_btn.pack(side="left")
@@ -341,37 +344,39 @@ class RadioApp:
         ttk.Button(controls, text="-", width=3, command=self.remove_station).pack(side="left")
 
         bottom_row = tk.Frame(main, bg="#6f1d1b")
-        bottom_row.pack(fill="x", pady=(2, 0))
+        bottom_row.pack(fill="x", pady=(0, 8))
+        bottom_row.grid_columnconfigure(0, weight=1)
+        bottom_row.grid_columnconfigure(1, weight=0)
+
         tk.Label(
             bottom_row,
             textvariable=self.speed_var,
             font=("Segoe UI", 9, "bold"),
             bg="#6f1d1b",
             fg="#f7e7a9",
-        ).pack(side="left")
-
-        realm_box = tk.Frame(bottom_row, bg="#6f1d1b")
-        realm_box.pack(side="right")
+        ).grid(row=1, column=0, sticky="w")
 
         tk.Label(
-            realm_box,
+            bottom_row,
             textvariable=self.realm_online_var,
             font=("Segoe UI", 8, "bold"),
             bg="#6f1d1b",
             fg="#f7e7a9",
             anchor="e",
-        ).pack(side="top", anchor="e")
+        ).grid(row=0, column=1, sticky="e")
 
-        realm_lbl = tk.Label(
-            realm_box,
+        self.realm_label = tk.Label(
+            bottom_row,
             text="REALM",
             font=("Segoe UI", 9, "bold"),
             bg="#6f1d1b",
-            fg="#f7e7a9",
+            fg=self._realm_default_fg,
             cursor="hand2",
         )
-        realm_lbl.pack(side="top", anchor="e")
-        realm_lbl.bind("<Button-1>", lambda _e: self._launch_realm())
+        self.realm_label.grid(row=1, column=1, sticky="e")
+        self.realm_label.bind("<Button-1>", lambda _e: self._launch_realm())
+        self.realm_label.bind("<Enter>", self._on_realm_enter)
+        self.realm_label.bind("<Leave>", self._on_realm_leave)
 
         self.listbox.bind("<Double-1>", lambda _event: self.toggle_play_pause())
         self.listbox.bind("<<ListboxSelect>>", self.on_station_selected)
@@ -406,15 +411,13 @@ class RadioApp:
                 payload = json.loads(resp.read())
             if payload.get("ok"):
                 n = int(payload.get("online", 0))
-                label = "jugador" if n == 1 else "jugadores"
-                text = f"{n} {label}"
+                text = str(n)
         except Exception:
             # Fallback: si el HTTP de auth (5556) no responde desde remoto,
             # consultar por UDP (5555) como contador best-effort.
             udp_count = self._probe_realm_online_udp()
             if udp_count is not None:
-                label = "jugador" if udp_count == 1 else "jugadores"
-                text = f"{udp_count} {label}"
+                text = str(udp_count)
             else:
                 text = ""
 
@@ -461,6 +464,14 @@ class RadioApp:
 
     def _block_arrow_keys(self, _event: tk.Event) -> str:
         return "break"
+
+    def _on_realm_enter(self, _event: tk.Event) -> None:
+        if self.realm_label is not None:
+            self.realm_label.configure(fg=self._realm_hover_fg)
+
+    def _on_realm_leave(self, _event: tk.Event) -> None:
+        if self.realm_label is not None:
+            self.realm_label.configure(fg=self._realm_default_fg)
 
     def _load_stations(self) -> dict[str, str]:
         if self.use_registry_store:

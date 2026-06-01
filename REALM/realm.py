@@ -332,6 +332,9 @@ def main():
     cam_x = cam_y = 0
     admin_chunk = (0, 0)
     last_view_star: dict | None = None
+    remote_last_centers: dict[int, tuple[float, float]] = {}
+    remote_plops: list[dict] = []
+    REMOTE_PLOP_DURATION = 1.0
 
     def _submit_chat_message(msg: str) -> None:
         nonlocal pending_chat_msg
@@ -831,6 +834,28 @@ def main():
         net.send(player.x, player.y, player.angle, player.skin_index, total_chunks, nickname,
                  "\x01" if chat_typing else current_chat)
 
+        now_t = time.time()
+        others_snapshot = net.get_others()
+        current_remote_ids = set(others_snapshot.keys())
+
+        for pid, (rx, ry, _rangle, rskin, _rchunks, _rnick, _rchat) in others_snapshot.items():
+            try:
+                skin_idx = int(rskin) % len(ghost_sprites)
+            except Exception:
+                skin_idx = 0
+            rspr = ghost_sprites[skin_idx]
+            remote_last_centers[pid] = (
+                float(rx) + rspr.get_width() / 2.0,
+                float(ry) + rspr.get_height() / 2.0,
+            )
+
+        for pid in list(remote_last_centers.keys()):
+            if pid not in current_remote_ids:
+                cx, cy = remote_last_centers.pop(pid)
+                remote_plops.append({"x": cx, "y": cy, "until": now_t + REMOTE_PLOP_DURATION})
+
+        remote_plops = [p for p in remote_plops if p["until"] > now_t]
+
         cam_x, cam_y = player.get_camera(WIDTH, HEIGHT)
 
         if map_open:
@@ -838,7 +863,7 @@ def main():
                 render_surface,
                 player.x,
                 player.y,
-                net.get_others(),
+                others_snapshot,
                 minimap_range,
                 map_stars=list(_discovered_stars.values()),
                 map_blackholes=list(_discovered_blackholes.values()),
@@ -861,13 +886,21 @@ def main():
             sun_tint_color, sun_tint_amount, player_brightness = universe.get_player_light()
             draw_players(
                 render_surface,
-                net.get_others(),
+                others_snapshot,
                 cam_x,
                 cam_y,
                 nick_font,
                 ghost_sprites,
                 light_provider=universe.get_light_at,
             )
+            for plop in remote_plops:
+                life = max(0.0, plop["until"] - now_t)
+                alpha = int(255 * min(1.0, life / REMOTE_PLOP_DURATION))
+                label = nick_font.render("¡PLOP!", True, (255, 160, 220)).convert_alpha()
+                label.set_alpha(alpha)
+                lx = int(float(plop["x"]) - cam_x - label.get_width() / 2)
+                ly = int(float(plop["y"]) - cam_y - label.get_height() / 2)
+                render_surface.blit(label, (lx, ly))
             draw_local_player(render_surface, player, nickname, cam_x, cam_y, nick_font,
                               chat_typing, current_chat,
                               tint_color=sun_tint_color, tint_amount=sun_tint_amount,

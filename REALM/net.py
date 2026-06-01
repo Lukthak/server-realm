@@ -163,6 +163,10 @@ class UDPLink:
                             others = self._parse_state(latest_state)
                             with self._lock:
                                 self._others = others
+                        else:
+                            # Si solo llega heartbeat (sin snapshot), no hay remotos.
+                            with self._lock:
+                                self._others = {}
                         if not was_connected:
                             _log(f"[NET] Conectado a {SERVER_IP}:{SERVER_PORT}")
 
